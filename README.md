@@ -52,10 +52,17 @@ They appear under exactly those names in the report and in the CSV, whose
 
 Every run is sealed the same way, and the reasons are in the docstrings rather
 than here: threaded BLAS pinned to one thread, `R_LIBS*` neutralized, startup
-files off, the child environment built from a whitelist instead of inherited,
-and ASLR disabled via `setarch -R`. Two arms that differ only in the interpreter
-are therefore divisible by each other, which is the property the whole design
-exists to protect.
+files off, and the child environment built from a whitelist instead of inherited.
+Two arms that differ only in the interpreter are therefore divisible by each
+other, which is the property the whole design exists to protect.
+
+What the driver deliberately does *not* do is set a process prefix. ASLR, the
+CPU governor and turbo are machine-wide settings, so they belong to the machine
+rather than to one child of one arm: put the host in the state you want once —
+`bench denoise minimize`, which needs root — and every arm measured on it
+inherits the same state. `--numa` is the one exception, because which node a
+process lands on is per-process by nature; it adds a `numactl` prefix and needs
+`numactl` installed.
 
 R runs under `--vanilla`, so no startup file of the user's or the machine's can
 change what is measured. The one way in is `RBENCH_PROFILE`, an R file sourced
@@ -218,11 +225,17 @@ any non-empty `failure`, or on a corpus that is not 118 benchmarks long:
 ci/check-failures.py output/samples.csv --expect-benchmarks 118
 ```
 
-The CSV and JSON are uploaded as the `vanilla-r` artifact. Read them for *did it
-run*, not for *how fast*: the runner is a shared 4-core desktop, and the image
-links R's own reference BLAS rather than OpenBLAS, so the numbers are not
-comparable to a tuned measurement host. The reps are deliberately low
-(`--runs 2 --iterations 2 --warmups 1`) to keep a PR's turnaround near 20 minutes.
+All three sinks are uploaded as the `vanilla-r` artifact, because they answer
+different questions: `report.json` is the report as the driver saw it,
+`samples.csv` is one row per sample, and `runs/` is the per-process tree —
+`environment.json`, and each run's `stdout`, `stderr`, `exitcode` and `seq`. The
+last is the one that matters when something breaks: a dead benchmark's R error
+text exists only in its `stderr` there.
+
+Read them for *did it run*, not for *how fast*: the runner is a shared 4-core
+desktop, and the image links R's own reference BLAS rather than OpenBLAS, so the
+numbers are not comparable to a tuned measurement host. A pull request runs
+`--runs 3 --iterations 5 --warmups 2`, roughly an hour.
 
 ## Licenses
 

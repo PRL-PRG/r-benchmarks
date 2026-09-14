@@ -73,7 +73,12 @@ jobs:
     # The driver imposes no timeout at any level -- the builder root sets
     # timeout=None and nothing overrides it -- so a benchmark that hangs would
     # otherwise hold the shared runner indefinitely.
-    timeout-minutes: 90
+    #
+    # 150 rather than 90: at 3 runs x (2 warmups + 5 iterations) this is ~2500
+    # kernel iterations over 354 R processes, which extrapolates to ~60 min on
+    # this runner from the 24 min a 2/2/1 run took. The cap is meant to catch a
+    # hang, not to be a deadline a normal run can drift into.
+    timeout-minutes: 150
     permissions:
       contents: read
       packages: read
@@ -91,6 +96,13 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # All three sinks, because they answer different questions and only the
+      # last one survives contact with a failure: --json is the report as the
+      # driver saw it, --csv is one row per sample for anything downstream, and
+      # --dir is the per-process tree -- environment.json plus each run's
+      # stdout/stderr/exitcode/seq. When a benchmark dies, its stderr under
+      # --dir is the only place the R error text exists.
+      #
       # No --cpus or --memory: the point of this runner is the whole machine,
       # and serialization comes from there being one runner, not from cgroups.
       # No --numa either -- one NUMA node here, and it would need numactl.
@@ -99,10 +111,11 @@ jobs:
           docker run --name "$CONTAINER" "$IMAGE" \
             ./rbench.py \
               --R /opt/R/bin/R \
-              --runs 2 --iterations 2 --warmups 1 \
+              --runs 3 --iterations 5 --warmups 2 \
               --jobs 1 --no-progress \
               --json /out/report.json \
-              --csv /out/samples.csv
+              --csv /out/samples.csv \
+              --dir /out/runs
 
       - name: Collect results
         if: always()
