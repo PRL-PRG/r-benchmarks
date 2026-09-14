@@ -12,7 +12,7 @@ sealed environment, sizes) is one Python module you can import and override.
 
 ```sh
 git clone https://github.com/PRL-PRG/r-benchmarks && cd r-benchmarks
-./rbench.py --R "$(command -v R)" --include '^areWeFast/' --invocations 1 --runs 3
+./rbench.py --R "$(command -v R)" --include '^areWeFast/' --runs 1 --iterations 3
 ```
 
 No install step: the drivers are [PEP 723](https://peps.python.org/pep-0723/)
@@ -23,7 +23,7 @@ binary.
 
 | | |
 |---|---|
-| `benchmarks/` | the 8 suites, the three R harnesses, `install_packages.R`, `marker.c`. Each suite carries its own `LICENSE` and `ORIGIN.md`. |
+| `benchmarks/` | the 8 suites, the two R harnesses, `install_packages.R`, `marker.c`. Each suite carries its own `LICENSE` and `ORIGIN.md`. |
 | `benchmarks/README.md` | the benchmark contract, the suite table, and what was deliberately left out |
 | `rbench.py` | the plain timing driver **and** the shared definition every driver starts from |
 | `rbench_perf.py` | the same corpus under `perf record`, one recording per invocation |
@@ -35,18 +35,20 @@ A benchmark is one `.R` file that defines `execute(size)`, and may define
 to the harness, never to the benchmark. [`benchmarks/README.md`](benchmarks/README.md)
 has the full contract.
 
-Sizes are not in the files. They are registered in `SUITES` in
-[`rbench.py`](rbench.py), calibrated so each benchmark runs about a second, with
-a comment wherever the number means something other than "how much data" — for
-`mathkernel`'s `*VecAdd-*` and several others it is a repetition count, and the
-comment says why.
+A benchmark's size is its `execute()` default, calibrated so it runs about a
+second. Where the calibrated value is not the default the file ships with,
+`SIZES` in [`rbench.py`](rbench.py) overrides it — 46 of the 118 — with a
+comment wherever the number means something other than "how much data": for
+`mathkernel`'s `*VecAdd-*` and several others it is a repetition count.
 
 ## The measurement design
 
-The measured unit is one **invocation**: a fresh R process running
-`warmups + runs` iterations of one benchmark. `--invocations` is the unit of
-replication, because the spread between processes is larger than the spread
-within one.
+Three nested axes, outermost first. A **run** is a fresh R process, and
+`--runs` is the unit of replication because the spread between processes is
+larger than the spread within one. Inside each, the harness does
+`--warmups` **iterations** it discards and then `--iterations` it measures.
+They appear under exactly those names in the report and in the CSV, whose
+`run` and `iteration` columns are these two axes.
 
 Every run is sealed the same way, and the reasons are in the docstrings rather
 than here: threaded BLAS pinned to one thread, `R_LIBS*` neutralized, startup
@@ -55,11 +57,19 @@ and ASLR disabled via `setarch -R`. Two arms that differ only in the interpreter
 are therefore divisible by each other, which is the property the whole design
 exists to protect.
 
+R runs under `--vanilla`, so no startup file of the user's or the machine's can
+change what is measured. The one way in is `RBENCH_PROFILE`, an R file sourced
+before the benchmark — for installing a JIT, setting a compiler option, or
+starting a tracer. If it defines `rbench_prepare()`, that is called after
+`setup()` and before the first iteration, which is where an ahead-of-time
+compiler acts on the benchmark's loaded functions. Either way the run reports
+that it was used, and the report records it.
+
 `--dry` prints the exact command and environment each child would get, without
 running anything, which is the quickest way to see what a flag actually did:
 
 ```sh
-./rbench.py --R "$(command -v R)" --include '^mathkernel/MMM-T3/rep0' --dry
+./rbench.py --R "$(command -v R)" --include '^mathkernel/MMM-T3/run0' --dry
 ```
 
 Setting the thread variables is not the same as the pin having worked, and
@@ -100,23 +110,54 @@ callees.
 
 ## Adding your own benchmarks
 
-Without forking: put them in `<dir>/<suite>/<name>.R`, declare their sizes in
-`<dir>/suites.toml`, and pass `--suite-path <dir>`.
+Suites are **declared, not discovered**: `SUITES` in `rbench.py` is the corpus,
+one line per benchmark and its size. Nothing on disk changes what runs, so the
+corpus is exactly what that file says it is — an unlisted `.R` file does not
+run, and a listed one is measured at the size beside it.
 
-```toml
-# mybench/suites.toml
-[mysuite]
-fib = 25
-"nested/matmul" = 300
-```
+Your own suite is a `suite_of` call and an `add`, which is also how this
+repository's consumers register a control group without touching the corpus:
 
 ```sh
-./rbench.py --R /path/to/R --suite-path ./mybench --include '^mysuite/'
+mkdir -p mine/mysuite && cat > mine/mysuite/fib.R <<'R'
+execute <- function(n = 24L) {
+  fib <- function(k) if (k < 2L) k else fib(k - 1L) + fib(k - 2L)
+  fib(n)
+}
+R
 ```
 
+```python
+import rbench as rb
+
+MINE = rb.suite_of("mysuite", [("fib", 24), ("deep/prog", 100)])
+
+app = rb.base_app().add(MINE)
+```
+
+A benchmark's **name is its file**: `<root>/<suite>/<name>.R`, so `deep/prog`
+is `mysuite/deep/prog.R`. Nothing is searched for and nothing is checked at
+startup — the path is built when the command is, and a name with no file behind
+it fails in R like any other missing input.
+
+`--benchmarks` is the one optional root, and says where those files are looked
+up — the directory bundled beside `rbench.py` when it is not given. The
+harnesses are *not* taken from it: they come from the bundled directory always,
+because a harness is part of the measurement design rather than of a suite, so
+a relocated corpus is still measured by the same rules.
+
+```sh
+./your_driver.py --R "$(command -v R)"                     # the bundled corpus
+./your_driver.py --R "$(command -v R)" --benchmarks ./mine # your suites' files
+```
+
+One root per invocation, so a suite whose files live elsewhere gets its own
+invocation — which is what the consumers of this corpus do for a control group,
+one `--include` and one `--benchmarks` at a time. A helper your benchmarks
+`source()` needs no mention anywhere: it is simply not a line in a suite.
+
 They run on exactly the corpus's terms — same harness, same sealed environment,
-same framing — and land in the same report. Every declared file is checked at
-startup, so a typo costs a second rather than a campaign.
+same framing — and land in the same report.
 
 ## Building your own driver
 

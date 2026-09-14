@@ -11,6 +11,10 @@
 # 5. finally, runs <iterations> times 'execute(<size>)'
 #
 # If <size> is omitted the benchmark's own default is used.
+#
+# RBENCH_PROFILE, if set, names an R file sourced before the benchmark. If it
+# defines `rbench_prepare()`, that is called after setup() and before the first
+# iteration, for anything that must act on the benchmark's loaded functions.
 # 
 # Contract:
 #
@@ -40,20 +44,17 @@ if (length(args) < 2L) {
 file  <- args[[1L]]
 iters <- as.integer(args[[2L]])
 
-# Phase marks for the bytecode profiler: it snapshots its counters under a label,
-# so the phases below can be told apart from each other and from R's own startup
-# (which it marks itself). `.Internal(bcprof_mark)` exists only in that build, and
-# only that harness sets RSH_TIMING, so everywhere else this is a no-op -- the
-# try() is for a stray RSH_TIMING under an R without the internal.
-# RSH_MARK_ITER additionally marks every iteration, which is how JIT warmup
-# becomes visible; off by default because it multiplies the output.
-.bc_mark <- if (nzchar(Sys.getenv("RSH_TIMING"))) {
-  function(label) try(.Internal(bcprof_mark(label)), silent = TRUE)
-} else {
-  function(label) invisible(NULL)
+# RBENCH_PROFILE names an R file to source before the benchmark: it is the one
+# way in for code that has to run first - installing a JIT, setting a compiler
+# option, starting a tracer - and it is why R itself runs under --vanilla, with
+# every startup file off. Sourced in the global environment, before setwd(), so
+# a relative path in it means what the caller meant. Untimed.
+.profile <- Sys.getenv("RBENCH_PROFILE")
+if (nzchar(.profile)) {
+  if (!file.exists(.profile))
+    stop(sprintf("RBENCH_PROFILE: no such file: %s", .profile), call. = FALSE)
+  source(.profile)
 }
-.bc_mark_iter <- if (nzchar(Sys.getenv("RSH_MARK_ITER"))) .bc_mark else
-  function(label) invisible(NULL)
 
 setwd(dirname(file))                    # so benchmarks resolve their data/helpers
 name <- sub("\\.[Rr]$", "", basename(file))
@@ -66,18 +67,21 @@ if (exists("doctor") && is.function(doctor)) {
   if (!isTRUE(diagnosis)) stop(sprintf("%s: %s", name, diagnosis), call. = FALSE)
 }
 
-# Sourcing the benchmark and its doctor(): any top-level library() it does lands
-# here. Not all of them -- a few load packages inside setup() or execute()
-# instead, so this is the boundary of *this file's* work, not of package loading.
-.bc_mark("sourced")
-
 if (exists("setup") && is.function(setup)) {
   tm <- system.time(if (length(formals(setup))) setup(size) else setup())
   cat(sprintf("====== %s, setup completed (%.3f ms) ======\n",
               name, tm[["elapsed"]] * 1000))
 }
-.bc_mark("setup")                       # emitted even with no setup(), so the
-                                        # phase list has a fixed shape
+
+# The second half of the RBENCH_PROFILE hook: anything that has to act on the
+# benchmark's *loaded* functions rather than run before them - an ahead-of-time
+# compiler, a tracer - defines `rbench_prepare` in the profile, and it is called
+# here, after setup() and before the first iteration. Untimed, like setup().
+if (exists("rbench_prepare") && is.function(rbench_prepare)) {
+  tm <- system.time(rbench_prepare())
+  cat(sprintf("====== %s, prepare completed (%.3f ms) ======\n",
+              name, tm[["elapsed"]] * 1000))
+}
 
 for (i in seq_len(iters)) {
   it <- i - 1L
@@ -109,4 +113,3 @@ for (i in seq_len(iters)) {
     forced * 1000,
     (c1[[1L]] - c0[[1L]] + c1[[2L]] - c0[[2L]]) * 1000))
 }
-.bc_mark("execute")                     # last mark, so it equals the totals

@@ -53,11 +53,13 @@ pqR's `SpeedTest/prg` programs are kept.
 
 ### Suites this repository does not define
 
-A consuming repository can add benchmarks of its own without forking the corpus:
-put them in `<dir>/<suite>/<name>.R`, declare their sizes in `<dir>/suites.toml`,
-and pass `--suite-path <dir>`. They are then run on exactly the terms the corpus
-is — same harness, same sealed environment, same iteration framing — and appear
-in the same reports. See `load_suites` in [`../rbench.py`](../rbench.py).
+A consuming repository can add benchmarks of its own without forking the
+corpus: put them in `<dir>/<suite>/<name>.R`, declare them with
+`suite_of("<suite>", [(name, size), ...])`, `add` that suite to the app, and
+run it with `--benchmarks <dir>`. They are then run on exactly the terms the corpus is — same harness,
+same sealed environment, same iteration framing — and appear in the same
+reports. See `suite_of` in [`../rbench.py`](../rbench.py) and the
+"Adding your own benchmarks" section of [`../README.md`](../README.md).
 
 This is where a control group belongs: programs written so that each lands in
 one known category, so that a measurement method can be checked against an

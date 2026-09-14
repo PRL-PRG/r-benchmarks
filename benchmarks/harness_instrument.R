@@ -25,6 +25,17 @@ dyn.load(file.path(here, "marker.so"))
 now <- function() .Call("rbench_monotonic")
 mark <- function(tag, t0, t1) cat(sprintf("MARK\t%s\t%.6f\t%.6f\n", tag, t0, t1))
 
+# Same hook as harness.R, and marked, so whatever it does is a phase of its own
+# rather than time charged to `source`.
+.profile <- Sys.getenv("RBENCH_PROFILE")
+if (nzchar(.profile)) {
+  if (!file.exists(.profile))
+    stop(sprintf("RBENCH_PROFILE: no such file: %s", .profile), call. = FALSE)
+  t0 <- now()
+  source(.profile)
+  mark("profile", t0, now())
+}
+
 setwd(dirname(file))                    # so benchmarks resolve their data/helpers
 
 t0 <- now()
