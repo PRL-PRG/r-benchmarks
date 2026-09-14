@@ -1,0 +1,131 @@
+# Run the corpus on vanilla R, on every pull request.
+#
+# Two stages, split by what each half needs. Building the image -- compiling R
+# from source, resolving CRAN and the pinned `bench` -- is machine-independent
+# and expensive, so it runs on disposable GitHub-hosted workers and is cached.
+# Running the benchmarks is not machine-independent at all, so it runs on the
+# self-hosted runner, from the image the first stage pushed.
+#
+# What this gates is that every benchmark in the corpus still executes on stock
+# R. The timings it produces are a by-product: the runner is a shared 4-core
+# desktop, and the image links R's reference BLAS, so the CSV is worth reading
+# for "did it run" and not for "how fast is it".
+
+name: benchmarks
+
+on:
+  pull_request:
+
+# A second push to the same PR should not sit behind the first one's 20-minute
+# benchmark job -- there is one self-hosted runner, and it takes one job at a
+# time, shared with the other repositories in this org.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  image:
+    name: Image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ steps.ref.outputs.image }}
+    steps:
+      # The PR head, not the merge commit github.sha points at for a
+      # pull_request event: that commit does not exist in the origin, so it
+      # cannot name an image the next job pulls by tag.
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Compute image ref
+        id: ref
+        run: |
+          echo "image=ghcr.io/prl-prg/r-benchmarks:${{ github.event.pull_request.head.sha }}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          tags: ${{ steps.ref.outputs.image }}
+          push: true
+          platforms: linux/amd64
+          cache-from: type=gha,scope=r-benchmarks
+          cache-to: type=gha,mode=max,scope=r-benchmarks
+
+  benchmark:
+    name: Vanilla R
+    needs: image
+    runs-on: self-hosted
+    # Never run a fork's code on the self-hosted machine. Such a PR also gets a
+    # read-only token, so the image it would need was never pushed.
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    # The driver imposes no timeout at any level -- the builder root sets
+    # timeout=None and nothing overrides it -- so a benchmark that hangs would
+    # otherwise hold the shared runner indefinitely.
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      packages: read
+    env:
+      IMAGE: ${{ needs.image.outputs.image }}
+      CONTAINER: rbench-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # No --cpus or --memory: the point of this runner is the whole machine,
+      # and serialization comes from there being one runner, not from cgroups.
+      # No --numa either -- one NUMA node here, and it would need numactl.
+      - name: Run the corpus on vanilla R
+        run: |
+          docker run --name "$CONTAINER" "$IMAGE" \
+            ./rbench.py \
+              --R /opt/R/bin/R \
+              --runs 2 --iterations 2 --warmups 1 \
+              --jobs 1 --no-progress \
+              --json /out/report.json \
+              --csv /out/samples.csv
+
+      - name: Collect results
+        if: always()
+        run: |
+          rm -rf results
+          docker cp "$CONTAINER:/out" results || echo "nothing to collect"
+
+      # rbench.py returns 0 whether or not the benchmarks worked, so this is
+      # what actually decides the build.
+      - name: Check for benchmark failures
+        run: ci/check-failures.py results/samples.csv --expect-benchmarks 118
+
+      - name: Archive results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vanilla-r
+          path: results
+
+      # The image is tagged per commit, so without this the runner accumulates a
+      # ~1.5 GB layer set for every push to every PR.
+      - name: Clean up
+        if: always()
+        run: |
+          docker rm -f "$CONTAINER" || true
+          docker image rm "$IMAGE" || true

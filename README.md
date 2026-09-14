@@ -197,6 +197,33 @@ Your header is what decides which `bench` you measure with — this repository
 deliberately does not pin one for its consumers. See the note in
 [`pyproject.toml`](pyproject.toml).
 
+## Continuous integration
+
+Every pull request runs the whole corpus on a from-source vanilla R, in two
+stages. [`Dockerfile`](Dockerfile) is built and pushed to
+`ghcr.io/prl-prg/r-benchmarks:<pr-head-sha>` on a GitHub-hosted runner, and then
+[`.github/workflows/benchmarks.yml`](.github/workflows/benchmarks.yml) runs
+`rbench.py` out of that image on a self-hosted machine. The split is by what each
+half needs: compiling R and resolving CRAN is machine-independent and cacheable,
+measuring is not.
+
+What it gates is that **every benchmark still executes**, which needs saying
+because `rbench.py` cannot tell you that by its exit code. A benchmark whose R
+process dies is recorded on the `failure` column and the run continues, exiting 0;
+only a `BenchError` or an interrupt is non-zero. So the build is decided by
+[`ci/check-failures.py`](ci/check-failures.py), which reads the CSV and fails on
+any non-empty `failure`, or on a corpus that is not 118 benchmarks long:
+
+```sh
+ci/check-failures.py output/samples.csv --expect-benchmarks 118
+```
+
+The CSV and JSON are uploaded as the `vanilla-r` artifact. Read them for *did it
+run*, not for *how fast*: the runner is a shared 4-core desktop, and the image
+links R's own reference BLAS rather than OpenBLAS, so the numbers are not
+comparable to a tuned measurement host. The reps are deliberately low
+(`--runs 2 --iterations 2 --warmups 1`) to keep a PR's turnaround near 20 minutes.
+
 ## Licenses
 
 The benchmarks are vendored from several projects under several licenses (MIT,
