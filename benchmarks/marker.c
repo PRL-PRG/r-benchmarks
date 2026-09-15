@@ -6,8 +6,6 @@
  *
  * The problem is that R has no monotonic clock of its own.
  * `Sys.time()` is CLOCK_REALTIME hence we need this helper.
- *
- * Compile: R CMD SHLIB marker.c -o marker.so
  */
 
 #define R_NO_REMAP

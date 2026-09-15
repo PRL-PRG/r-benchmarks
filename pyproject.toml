@@ -1,36 +1,14 @@
 [project]
 name = "rbench"
 version = "0.1.0"
-description = "The R benchmark corpus, its R harnesses, and the drivers that run them"
+description = "The R benchmark suite and the harness to run them"
 requires-python = ">=3.12"
-license = "BSD-3-Clause"
+license = "MIT"
 dependencies = ["bench"]
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
-# Two flat modules, not a package: `./rbench.py` has to stay directly runnable
-# (its PEP 723 header is what makes that work with no install at all), and a
-# consuming repository installs this as an editable path dependency to get
-# `import rbench`.
 [tool.hatch.build.targets.wheel]
 only-include = ["rbench.py", "rbench_perf.py"]
-
-# Deliberately no `[tool.uv.sources]` for `bench`.
-#
-# `bench` is not on PyPI, so something has to say where it comes from. Both
-# entry points do, and neither is here:
-#
-#   ./rbench.py             the PEP 723 header of the script pins a revision, so
-#   ./rbench_perf.py        a bare clone runs with no install and no submodule
-#
-#   import rbench           the consuming repository's own script header names
-#                           the `bench` it wants -- for a repository developing
-#                           `bench` alongside this one, an editable checkout
-#
-# Pinning it here as well would decide the second case for the consumer, and uv
-# resolves that as a hard error rather than as a precedence: "Requirements
-# contain conflicting URLs for package `bench`". The consumer owns the choice,
-# because `bench` fixes the iteration framing and the report schema, and it is
-# the consumer that has to keep its own arms comparable to each other.

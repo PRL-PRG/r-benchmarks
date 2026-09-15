@@ -96,6 +96,9 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # No `./rbench.py` and no `--R`: the image's ENTRYPOINT is the driver and
+      # /opt/R/bin is on its PATH, so flags are all that is left to pass.
+      #
       # All three sinks, because they answer different questions and only the
       # last one survives contact with a failure: --json is the report as the
       # driver saw it, --csv is one row per sample for anything downstream, and
@@ -109,8 +112,6 @@ jobs:
       - name: Run the corpus on vanilla R
         run: |
           docker run --name "$CONTAINER" "$IMAGE" \
-            ./rbench.py \
-              --R /opt/R/bin/R \
               --runs 3 --iterations 5 --warmups 2 \
               --jobs 1 --no-progress \
               --json /out/report.json \
@@ -124,9 +125,42 @@ jobs:
           docker cp "$CONTAINER:/out" results || echo "nothing to collect"
 
       # rbench.py returns 0 whether or not the benchmarks worked, so this is
-      # what actually decides the build.
+      # what actually decides the build. A dead benchmark is recorded on the
+      # CSV's `failure` column and the run continues; only a BenchError or an
+      # interrupt is non-zero.
+      #
+      # Run through the image's own R rather than the runner's, so the check
+      # needs nothing installed on the machine, and read the script from stdin
+      # so it stays here in the workflow instead of in a file to go stale.
       - name: Check for benchmark failures
-        run: ci/check-failures.py results/samples.csv --expect-benchmarks 118
+        run: |
+          docker run -i --rm --entrypoint R -v "$PWD/results:/results:ro" "$IMAGE" \
+            --no-echo --vanilla -f /dev/stdin <<'RSCRIPT'
+          # colClasses matters: on a clean run `failure` is empty in every row, and
+          # read.csv would type it as logical NA rather than empty strings, so a
+          # string comparison would quietly stop meaning anything.
+          d <- read.csv("/results/samples.csv", comment.char = "#", colClasses = "character")
+          stopifnot(nrow(d) > 0, all(c("suite", "benchmark", "failure") %in% names(d)))
+
+          name <- paste(d$suite, d$benchmark, sep = "/")
+          bad <- trimws(d$failure) != ""
+          n <- length(unique(name))
+          cat(sprintf("%d samples over %d benchmarks\n", nrow(d), n))
+
+          ok <- TRUE
+          if (any(bad)) {
+            cat(sprintf("\n%d benchmark(s) failed:\n", length(unique(name[bad]))))
+            for (s in sort(unique(sprintf("  %s: %s", name[bad], trimws(d$failure[bad])))))
+              cat(s, "\n")
+            ok <- FALSE
+          }
+          if (n != 118) {
+            cat(sprintf("\nexpected 118 benchmarks, got %d\n", n))
+            ok <- FALSE
+          }
+          if (!ok) quit(status = 1)
+          cat("no failures\n")
+          RSCRIPT
 
       - name: Archive results
         if: always()

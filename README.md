@@ -1,68 +1,182 @@
 # r-benchmarks
 
-A corpus of **118 R programs in 8 suites**, the R harnesses that run them, and
-two drivers: one that times them on any R build, one that profiles them with
-`perf`.
-
-It is meant to be usable by anything that needs to measure an R implementation —
-a new interpreter, a JIT, a change to GNU R, a compiler flag — without adopting
-whatever study it was extracted from. The benchmarks are plain R files with a
-three-function contract; the measurement design (process framing, warm-up,
-sealed environment, sizes) is one Python module you can import and override.
+A curated benchmark suite for the R programming language including a common
+harness to run them. It uses the [bench](https://github.com/PRL-PRG/bench)
+benchmarking framework.
 
 ```sh
-git clone https://github.com/PRL-PRG/r-benchmarks && cd r-benchmarks
-./rbench.py --R "$(command -v R)" --include '^areWeFast/' --runs 1 --iterations 3
+$ git clone https://github.com/PRL-PRG/r-benchmarks && cd r-benchmarks
+$ ./rbench.py --R "$(command -v R)" --include 'areWeFast/mandelbrot' --runs 1 --iterations 3
+
+Finished: areWeFast/mandelbrot/run0: 4.18 elapsed [s] (harness)
+
+areWeFast/mandelbrot   runtime [ms]
+  matrix   mean ± σ        min … max
+  run0     985.79 ± 4.42   (980.98 … 989.69) (1 warmup, 3 runs, 0 failed)
+
+areWeFast/mandelbrot   gc [ms]
+  matrix   mean ± σ      min … max
+  run0     6.67 ± 1.53   (5.00 … 8.00) (1 warmup, 3 runs, 0 failed)
+
+areWeFast/mandelbrot   cpu [ms]
+  matrix   mean ± σ        min … max
+  run0     985.67 ± 4.51   (981.00 … 990.00) (1 warmup, 3 runs, 0 failed)
+
+areWeFast/mandelbrot   elapsed [s]
+  matrix   value
+  run0     4.18    (1 samples, 1 warmup, 3 runs, 0 failed)
+
+areWeFast/mandelbrot   max_rss [MB]
+  matrix   value
+  run0     69.59   (1 samples, 1 warmup, 3 runs, 0 failed)
 ```
 
 No install step: the drivers are [PEP 723](https://peps.python.org/pep-0723/)
 scripts and `uv` builds their environment on first run. You need `uv` and an R
 binary.
 
-## What is here
-
-| | |
-|---|---|
-| `benchmarks/` | the 8 suites, the two R harnesses, `install_packages.R`, `marker.c`. Each suite carries its own `LICENSE` and `ORIGIN.md`. |
-| `benchmarks/README.md` | the benchmark contract, the suite table, and what was deliberately left out |
-| `rbench.py` | the plain timing driver **and** the shared definition every driver starts from |
-| `rbench_perf.py` | the same corpus under `perf record`, one recording per invocation |
-
 ## The benchmark contract
 
-A benchmark is one `.R` file that defines `execute(size)`, and may define
-`setup(size)` and `doctor()`. Timing, repetition and process management belong
-to the harness, never to the benchmark. [`benchmarks/README.md`](benchmarks/README.md)
-has the full contract.
+A benchmark is one `.R` file under `benchmarks/<suite>/`. Timing, repetition and
+process management belong to the harness, never to the benchmark. A benchmark's
+size is its `execute()` default, calibrated so it runs about a second.
 
-A benchmark's size is its `execute()` default, calibrated so it runs about a
-second. Where the calibrated value is not the default the file ships with,
-`SIZES` in [`rbench.py`](rbench.py) overrides it — 46 of the 118 — with a
-comment wherever the number means something other than "how much data": for
-`mathkernel`'s `*VecAdd-*` and several others it is a repetition count.
+It must define:
+
+- **`execute(size = <default>)`** — the workload, run once per iteration and
+  timed. Its first argument is the sizing parameter; the harness passes the
+  registered value, falling back to this default.
+
+It may additionally define:
+
+- **`doctor()`** — returns `TRUE` when its dependencies (R packages, data files)
+  are present, or a **string** describing what is missing. When it is not `TRUE`
+  the harness **fails** with that message and runs no iterations: a missing
+  dependency is an error, not a quietly absent benchmark.
+- **`setup(size)`** — prepares inputs (draws them, or reads a cached data file).
+  It runs once, after `doctor()` and **before** the timed iterations, so its cost
+  is excluded from the runtime, and it leaves the inputs **in memory** (by
+  convention in a top-level `.data` it fills with `<<-`). `execute()` must
+  neither generate nor load data. `setup()` must be idempotent, and it is given
+  the same size `execute()` will get.
+
+## How a benchmark is run
+
+One benchmark at one size, in one process, is:
+
+```sh
+R --no-echo --vanilla -f benchmarks/harness.R --args <benchmark>.R <warmups+iterations> <size>
+```
+
+The harness sources `RBENCH_PROFILE` if set, then `setwd()`s to the
+**benchmark's own directory** — which is what lets a benchmark reach its `data/`
+cache and its helpers by relative path, and `shootout` reach `../fasta/` — then
+sources the benchmark and runs `doctor()`, `setup(size)`, the optional
+`rbench_prepare()` hook, and finally `iterations` calls of `execute(size)`.
+
+The harness does not know about warm-up. It is passed `warmups + iterations` and
+runs exactly that many, printing one line per iteration; deciding that the first
+`warmups` of them do not count is the driver's job, not the harness's.
+
+The child's environment is **replaced**, not extended — only `PATH`, `HOME`,
+`SHELL`, `USER`, `TMPDIR`, `LD_LIBRARY_PATH`, `LANG`, `LC_ALL`, `LC_COLLATE`,
+`TZ`, `R_DISABLE_BYTECODE` and `RBENCH_PROFILE` are passed through. A run
+therefore depends on the calling shell only through those, and anything else is
+dropped silently rather than changing a measurement invisibly.
+
+The resolved variants are **shuffled** under a fixed seed, so the runs of one
+benchmark are spread across the suite rather than done back to back: a machine
+that drifts during a long session then spreads that drift across every
+benchmark instead of concentrating it in whichever ran while it drifted.
+
+### Running benchmark without bench
+
+The harness is usable on its own, which is the quickest way to try a change to
+one benchmark:
+
+```sh
+cd benchmarks
+R --no-echo --vanilla -f harness.R --args areWeFast/mandelbrot.R 3
+```
+
+That prints a `====== ... completed in <t> ms ... ======` line per iteration and
+nothing else. Pass a size as a third argument to override the benchmark's own
+default; omit it and `formals(execute)[[1]]` is used.
+
+What you give up is the sealing, so numbers from this are for looking at, not
+for comparing against another build. To get the driver's environment, set it
+yourself:
+
+```sh
+cd benchmarks
+env OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 \
+    VECLIB_MAXIMUM_THREADS=1 R_LIBS=" " R_LIBS_USER=" " R_LIBS_SITE=" " \
+  R --no-echo --vanilla -f harness.R --args riposte/kmeans.R 3
+```
+
+The single space in `R_LIBS*` is deliberate and not the same as `""`: R
+substitutes its default for an empty value, but drops one that names no
+directory.
+
+## Running in Docker
+
+The image built by [`Dockerfile`](Dockerfile) carries R, the corpus, the CRAN
+packages the benchmarks need and a resolved `bench`, and its entrypoint is the
+driver — so flags are all there is to pass:
+
+```sh
+docker build -t r-benchmarks .
+docker run --rm r-benchmarks --include '^areWeFast/' --runs 1 --iterations 3
+```
+
+`docker run --rm r-benchmarks` with no flags runs the whole corpus at the
+driver's defaults. To keep the results, write them into a mounted directory:
+
+```sh
+docker run --rm -v "$PWD/out:/out" --user "$(id -u):$(id -g)" r-benchmarks \
+  --runs 3 --iterations 5 --warmups 2 \
+  --json /out/report.json --csv /out/samples.csv --dir /out/runs
+```
+
+`--user` is worth the noise: without it the container writes as root and you get
+a `out/` you need `sudo` to delete.
+
+CI publishes the same image per commit, so a run can be reproduced without
+building anything:
+
+```sh
+docker run --rm ghcr.io/prl-prg/r-benchmarks:<commit-sha> --list
+```
+
+Anything other than the driver needs `--entrypoint`, e.g.
+`docker run --rm --entrypoint R r-benchmarks --version`.
+
+Note the image is for reproducibility and convenience, not for the best
+numbers: it links R's own reference BLAS rather than OpenBLAS, and a container
+does nothing about a noisy host.
+
+## Suites
+
+The following benchmarks are included:
+
+| Suite | Description | Original source | License |
+|---|---|---|---|
+| [areWeFast](benchmarks/areWeFast) | Core micro-benchmarks from the *Are We Fast Yet?* cross-language suite (bounce, mandelbrot, storage), translated to R by Kalibera et al. (VEE'14, doi:10.1145/2576195.2576205). | [smarr/are-we-fast-yet](https://github.com/smarr/are-we-fast-yet) | MIT |
+| [RealThing](benchmarks/RealThing) | Real-world R workloads: convolution, volcano rendering, flexclust clustering. | R *Writing R Extensions* manual; [flexclust](https://cran.r-project.org/package=flexclust) (© F. Leisch) | GPL-2 |
+| [shootout](benchmarks/shootout) | R port of the Computer Language Benchmarks Game (binary-trees, fasta, n-body, spectral-norm, …). | [RB](https://github.com/rbenchmark/benchmarks); orig [Benchmarks Game](https://benchmarksgame-team.pages.debian.net/benchmarksgame/) | BSD-3-Clause |
+| [SpeedTest](benchmarks/SpeedTest) | Numerical and text programs: Cholesky, EM, Gaussian processes, HMC, matrix exponential, sieve, MLP, Q-learning. | Radford Neal's [pqR](https://github.com/radfordneal/pqR) speed tests | GPL-2 |
+| [mathkernel](benchmarks/mathkernel) | Math kernels: matrix-matrix multiply and vector add (double/int, ±NA; scalar/vector/builtin variants). | [RB](https://github.com/rbenchmark/benchmarks) | BSD-3-Clause |
+| [misc](benchmarks/misc) | 2D random walk (scalar / vector / optimized). | [RB](https://github.com/rbenchmark/benchmarks); orig R. Ihaka | BSD-3-Clause |
+| [R-benchmark-25](benchmarks/R-benchmark-25) | The ATT *R-benchmark-25*: matrix calculation, matrix functions, and "programmation" kernels. | [RB](https://github.com/rbenchmark/benchmarks); orig [r.research.att.com](http://r.research.att.com/benchmarks/) | BSD-3-Clause |
+| [riposte](benchmarks/riposte) | Vector-heavy benchmarks from the Riposte project (black-scholes, k-means, PCA, logistic regression, …). | [RB](https://github.com/rbenchmark/benchmarks); orig [jtalbot/riposte](https://github.com/jtalbot/riposte) (J. Talbot) | BSD-3-Clause |
 
 ## The measurement design
 
-Three nested axes, outermost first. A **run** is a fresh R process, and
-`--runs` is the unit of replication because the spread between processes is
-larger than the spread within one. Inside each, the harness does
-`--warmups` **iterations** it discards and then `--iterations` it measures.
-They appear under exactly those names in the report and in the CSV, whose
-`run` and `iteration` columns are these two axes.
+The scripts takes a few flags to control how the benchmarks are run:
 
-Every run is sealed the same way, and the reasons are in the docstrings rather
-than here: threaded BLAS pinned to one thread, `R_LIBS*` neutralized, startup
-files off, and the child environment built from a whitelist instead of inherited.
-Two arms that differ only in the interpreter are therefore divisible by each
-other, which is the property the whole design exists to protect.
-
-What the driver deliberately does *not* do is set a process prefix. ASLR, the
-CPU governor and turbo are machine-wide settings, so they belong to the machine
-rather than to one child of one arm: put the host in the state you want once —
-`bench denoise minimize`, which needs root — and every arm measured on it
-inherits the same state. `--numa` is the one exception, because which node a
-process lands on is per-process by nature; it adds a `numactl` prefix and needs
-`numactl` installed.
+- `--runs` controls how many R process will run.
+- `--iterations` is the number of iterations the benchmark will run in one R process.
+- `--warmups` controls how many iterations will be discarded for the statistics (marked as warmup in the results).
 
 R runs under `--vanilla`, so no startup file of the user's or the machine's can
 change what is measured. The one way in is `RBENCH_PROFILE`, an R file sourced
@@ -86,9 +200,7 @@ elapsed: about 1 when it took, about the core count when it did not.
 
 ## R package dependencies
 
-Three CRAN packages — `Matrix`, `MASS`, `clusterGeneration` — needed by 9 of the
-118 benchmarks, each guarded by a `doctor()` that fails loudly rather than
-skipping. Install them into a specific interpreter's own library:
+Some benchmarks need a few CRAN packages. Then can be installed using:
 
 ```sh
 cd benchmarks && R_LIBS=" " R_LIBS_USER=" " R_LIBS_SITE=" " \
@@ -200,49 +312,38 @@ an editable path dependency in your driver's script header:
 # ///
 ```
 
-Your header is what decides which `bench` you measure with — this repository
-deliberately does not pin one for its consumers. See the note in
-[`pyproject.toml`](pyproject.toml).
-
-## Continuous integration
-
-Every pull request runs the whole corpus on a from-source vanilla R, in two
-stages. [`Dockerfile`](Dockerfile) is built and pushed to
-`ghcr.io/prl-prg/r-benchmarks:<pr-head-sha>` on a GitHub-hosted runner, and then
-[`.github/workflows/benchmarks.yml`](.github/workflows/benchmarks.yml) runs
-`rbench.py` out of that image on a self-hosted machine. The split is by what each
-half needs: compiling R and resolving CRAN is machine-independent and cacheable,
-measuring is not.
-
-What it gates is that **every benchmark still executes**, which needs saying
-because `rbench.py` cannot tell you that by its exit code. A benchmark whose R
-process dies is recorded on the `failure` column and the run continues, exiting 0;
-only a `BenchError` or an interrupt is non-zero. So the build is decided by
-[`ci/check-failures.py`](ci/check-failures.py), which reads the CSV and fails on
-any non-empty `failure`, or on a corpus that is not 118 benchmarks long:
-
-```sh
-ci/check-failures.py output/samples.csv --expect-benchmarks 118
-```
-
-All three sinks are uploaded as the `vanilla-r` artifact, because they answer
-different questions: `report.json` is the report as the driver saw it,
-`samples.csv` is one row per sample, and `runs/` is the per-process tree —
-`environment.json`, and each run's `stdout`, `stderr`, `exitcode` and `seq`. The
-last is the one that matters when something breaks: a dead benchmark's R error
-text exists only in its `stderr` there.
-
-Read them for *did it run*, not for *how fast*: the runner is a shared 4-core
-desktop, and the image links R's own reference BLAS rather than OpenBLAS, so the
-numbers are not comparable to a tuned measurement host. A pull request runs
-`--runs 3 --iterations 5 --warmups 2`, roughly an hour.
+Your header is what decides which `bench` you measure with, and this repository
+deliberately does not pin one for its consumers: `bench` fixes the iteration
+framing and the report schema, and it is the consuming repository that has to
+keep its own arms comparable to each other. Pinning it in
+[`pyproject.toml`](pyproject.toml) as well would decide that for you — and uv
+treats it as a hard error rather than a precedence (*"Requirements contain
+conflicting URLs for package `bench`"*).
 
 ## Licenses
 
-The benchmarks are vendored from several projects under several licenses (MIT,
-BSD-3-Clause, GPL-2). Each suite directory has its own `LICENSE` and an
-`ORIGIN.md` naming the upstream and what was changed; the summary table is in
-[`benchmarks/README.md`](benchmarks/README.md).
+The benchmarks are vendored from several projects under several licenses. Every
+suite directory carries its own `LICENSE` and an `ORIGIN.md` naming the project
+the files came from, the original authors where RB repackaged someone else's
+work, and what was changed to fit the harness contract. Start there.
 
-The harnesses, `marker.c` and the drivers are this repository's own work, under
-BSD-3-Clause — see [`LICENSE`](LICENSE).
+| Suite | License | Details |
+|---|---|---|
+| areWeFast | MIT, and Revised BSD for `mandelbrot` | [ORIGIN.md](benchmarks/areWeFast/ORIGIN.md) |
+| RealThing | GPL-2 | [ORIGIN.md](benchmarks/RealThing/ORIGIN.md) |
+| SpeedTest | GPL-2 | [ORIGIN.md](benchmarks/SpeedTest/ORIGIN.md) |
+| shootout | BSD-3-Clause | [ORIGIN.md](benchmarks/shootout/ORIGIN.md) |
+| mathkernel | BSD-3-Clause | [ORIGIN.md](benchmarks/mathkernel/ORIGIN.md) |
+| misc | BSD-3-Clause | [ORIGIN.md](benchmarks/misc/ORIGIN.md) |
+| R-benchmark-25 | BSD-3-Clause | [ORIGIN.md](benchmarks/R-benchmark-25/ORIGIN.md) |
+| riposte | BSD-3-Clause | [ORIGIN.md](benchmarks/riposte/ORIGIN.md) |
+
+The five BSD-3-Clause suites were ported from the **R Benchmark Suite (RB)**,
+<https://github.com/rbenchmark/benchmarks>, and each ported file carries an
+`# Upstream:` comment pointing back to it. RB had itself repackaged several from
+their own upstreams; both links are in each `ORIGIN.md`.
+
+The harnesses (`harness*.R`), `marker.c` and the drivers are this repository's
+own work, under the MIT license — see [`LICENSE`](LICENSE). The vendored suites
+keep the licenses above; those are the upstreams' terms and are not ours to
+change.

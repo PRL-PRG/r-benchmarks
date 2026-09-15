@@ -15,6 +15,5 @@ output*/
 
 .git/
 .github/
-ci/
 Dockerfile
 .dockerignore
