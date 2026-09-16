@@ -1,0 +1,178 @@
+# Run the corpus on vanilla R, on every pull request.
+#
+# Two stages, split by what each half needs. Building the image -- compiling R
+# from source, resolving CRAN and the pinned `bench` -- is machine-independent
+# and expensive, so it runs on disposable GitHub-hosted workers and is cached.
+# Running the benchmarks is not machine-independent at all, so it runs on the
+# self-hosted runner, from the image the first stage pushed.
+#
+# What this gates is that every benchmark in the corpus still executes on stock
+# R. The timings it produces are a by-product: the runner is a shared 4-core
+# desktop, and the image links R's reference BLAS, so the CSV is worth reading
+# for "did it run" and not for "how fast is it".
+
+name: benchmarks
+
+on:
+  pull_request:
+
+# A second push to the same PR should not sit behind the first one's 20-minute
+# benchmark job -- there is one self-hosted runner, and it takes one job at a
+# time, shared with the other repositories in this org.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  image:
+    name: Image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image: ${{ steps.ref.outputs.image }}
+    steps:
+      # The PR head, not the merge commit github.sha points at for a
+      # pull_request event: that commit does not exist in the origin, so it
+      # cannot name an image the next job pulls by tag.
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Compute image ref
+        id: ref
+        run: |
+          echo "image=ghcr.io/prl-prg/r-benchmarks:${{ github.event.pull_request.head.sha }}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          tags: ${{ steps.ref.outputs.image }}
+          push: true
+          platforms: linux/amd64
+          cache-from: type=gha,scope=r-benchmarks
+          cache-to: type=gha,mode=max,scope=r-benchmarks
+
+  benchmark:
+    name: Vanilla R
+    needs: image
+    runs-on: self-hosted
+    # Never run a fork's code on the self-hosted machine. Such a PR also gets a
+    # read-only token, so the image it would need was never pushed.
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    # The driver imposes no timeout at any level -- the builder root sets
+    # timeout=None and nothing overrides it -- so a benchmark that hangs would
+    # otherwise hold the shared runner indefinitely.
+    #
+    # 150 rather than 90: at 3 runs x (2 warmups + 5 iterations) this is ~2500
+    # kernel iterations over 354 R processes, which extrapolates to ~60 min on
+    # this runner from the 24 min a 2/2/1 run took. The cap is meant to catch a
+    # hang, not to be a deadline a normal run can drift into.
+    timeout-minutes: 150
+    permissions:
+      contents: read
+      packages: read
+    env:
+      IMAGE: ${{ needs.image.outputs.image }}
+      CONTAINER: rbench-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # No `./rbench.py` and no `--R`: the image's ENTRYPOINT is the driver and
+      # /opt/R/bin is on its PATH, so flags are all that is left to pass.
+      #
+      # All three sinks, because they answer different questions and only the
+      # last one survives contact with a failure: --json is the report as the
+      # driver saw it, --csv is one row per sample for anything downstream, and
+      # --dir is the per-process tree -- environment.json plus each run's
+      # stdout/stderr/exitcode/seq. When a benchmark dies, its stderr under
+      # --dir is the only place the R error text exists.
+      #
+      # No --cpus or --memory: the point of this runner is the whole machine,
+      # and serialization comes from there being one runner, not from cgroups.
+      # No --numa either -- one NUMA node here, and it would need numactl.
+      - name: Run the corpus on vanilla R
+        run: |
+          docker run --name "$CONTAINER" "$IMAGE" \
+              --runs 3 --iterations 5 --warmups 2 \
+              --jobs 1 --no-progress \
+              --json /out/report.json \
+              --csv /out/samples.csv \
+              --dir /out/runs
+
+      - name: Collect results
+        if: always()
+        run: |
+          rm -rf results
+          docker cp "$CONTAINER:/out" results || echo "nothing to collect"
+
+      # rbench.py returns 0 whether or not the benchmarks worked, so this is
+      # what actually decides the build. A dead benchmark is recorded on the
+      # CSV's `failure` column and the run continues; only a BenchError or an
+      # interrupt is non-zero.
+      #
+      # Run through the image's own R rather than the runner's, so the check
+      # needs nothing installed on the machine, and read the script from stdin
+      # so it stays here in the workflow instead of in a file to go stale.
+      - name: Check for benchmark failures
+        run: |
+          docker run -i --rm --entrypoint R -v "$PWD/results:/results:ro" "$IMAGE" \
+            --no-echo --vanilla -f /dev/stdin <<'RSCRIPT'
+          # colClasses matters: on a clean run `failure` is empty in every row, and
+          # read.csv would type it as logical NA rather than empty strings, so a
+          # string comparison would quietly stop meaning anything.
+          d <- read.csv("/results/samples.csv", comment.char = "#", colClasses = "character")
+          stopifnot(nrow(d) > 0, all(c("suite", "benchmark", "failure") %in% names(d)))
+
+          name <- paste(d$suite, d$benchmark, sep = "/")
+          bad <- trimws(d$failure) != ""
+          n <- length(unique(name))
+          cat(sprintf("%d samples over %d benchmarks\n", nrow(d), n))
+
+          ok <- TRUE
+          if (any(bad)) {
+            cat(sprintf("\n%d benchmark(s) failed:\n", length(unique(name[bad]))))
+            for (s in sort(unique(sprintf("  %s: %s", name[bad], trimws(d$failure[bad])))))
+              cat(s, "\n")
+            ok <- FALSE
+          }
+          if (n != 118) {
+            cat(sprintf("\nexpected 118 benchmarks, got %d\n", n))
+            ok <- FALSE
+          }
+          if (!ok) quit(status = 1)
+          cat("no failures\n")
+          RSCRIPT
+
+      - name: Archive results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vanilla-r
+          path: results
+
+      # The image is tagged per commit, so without this the runner accumulates a
+      # ~1.5 GB layer set for every push to every PR.
+      - name: Clean up
+        if: always()
+        run: |
+          docker rm -f "$CONTAINER" || true
+          docker image rm "$IMAGE" || true

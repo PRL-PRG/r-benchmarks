@@ -1,0 +1,19 @@
+# `COPY . /r-benchmarks` must not carry the host's working state into the image.
+#
+# benchmarks/**/data/ matters most: those are the five `.rds` caches a setup()
+# writes on first run, ~380 MB on a developer machine. Copying them in would both
+# bloat the image and hide the very failure CI exists to catch -- a benchmark
+# whose doctor() only passes because a stale cache happens to be on disk.
+benchmarks/**/data/
+benchmarks/marker.o
+benchmarks/marker.so
+
+.venv/
+__pycache__/
+*.pyc
+output*/
+
+.git/
+.github/
+Dockerfile
+.dockerignore
