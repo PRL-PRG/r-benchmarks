@@ -93,7 +93,9 @@ for (i in seq_len(iters)) {
   # `gc.time()` is quantized to 1 ms and only starts accumulating on its first
   # call, so it would report this first forced GC as 0.
   forced <- Sys.time()
-  gc(full = TRUE)
+  # `gc()` and not `gc(full = TRUE)`: `full` only exists from R 3.5.0, where it
+  # defaults to TRUE, and before that every `gc()` collected all generations.
+  gc()
   forced <- as.numeric(difftime(Sys.time(), forced, units = "secs"))
 
   g0 <- gc.time()

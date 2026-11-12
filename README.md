@@ -65,8 +65,12 @@ It may additionally define:
 One benchmark at one size, in one process, is:
 
 ```sh
-R --no-echo --vanilla -f benchmarks/harness.R --args <benchmark>.R <warmups+iterations> <size>
+R --slave --vanilla -f benchmarks/harness.R --args <benchmark>.R <warmups+iterations> <size>
 ```
+
+`--slave` is R's pre-4.0 name for `--no-echo`. R 4.x still accepts it without a
+word, and it is the only spelling R 3.x knows, so one command line runs every R
+from 3.0 on. The harnesses themselves stick to base R that 3.0 already had.
 
 The harness sources `RBENCH_PROFILE` if set, then `setwd()`s to the
 **benchmark's own directory** — which is what lets a benchmark reach its `data/`
@@ -96,7 +100,7 @@ one benchmark:
 
 ```sh
 cd benchmarks
-R --no-echo --vanilla -f harness.R --args areWeFast/mandelbrot.R 3
+R --slave --vanilla -f harness.R --args areWeFast/mandelbrot.R 3
 ```
 
 That prints a `====== ... completed in <t> ms ... ======` line per iteration and
@@ -111,7 +115,7 @@ yourself:
 cd benchmarks
 env OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 \
     VECLIB_MAXIMUM_THREADS=1 R_LIBS=" " R_LIBS_USER=" " R_LIBS_SITE=" " \
-  R --no-echo --vanilla -f harness.R --args riposte/kmeans.R 3
+  R --slave --vanilla -f harness.R --args riposte/kmeans.R 3
 ```
 
 The single space in `R_LIBS*` is deliberate and not the same as `""`: R
@@ -227,6 +231,24 @@ a leaf-only recording). Which one you pick changes the answer, not just the
 cost; `dwarf` is the default because it is the only mode that carries inlined
 callees.
 
+Each recording lands in `<dir>/<suite>/<benchmark>/<variant>/<run>/`: `perf.data`,
+the `perf script` frame table `perf-frames.csv`, and the run's `stdout` with its
+`MARK` lines. [`profile/categorize.R`](profile/categorize.R) turns a `--dir` tree
+into the share of `execute()` each category of R's runtime takes (interpreter,
+call, dispatch, lookup, primitives, mem-alloc, mem-duplicate, mem-gc,
+native-ffi, native-blas, other, and what stayed unattributed), plus the
+largest reasons a sample stayed unattributed:
+
+```sh
+Rscript profile/categorize.R --causes output/causes.csv output/categories.csv output/perf
+```
+
+The classification is [`profile/perf-rules.R`](profile/perf-rules.R), taken
+unchanged from the paper artifact it was written for (see
+[`profile/ORIGIN.md`](profile/ORIGIN.md)); `categorize.R` only applies it. It
+runs on the analysis machine, not on the R being measured, and needs R >= 4.1
+with dplyr, tidyr, readr, stringr and tibble.
+
 ## Adding your own benchmarks
 
 Suites are **declared, not discovered**: `SUITES` in `rbench.py` is the corpus,
@@ -281,18 +303,23 @@ same framing — and land in the same report.
 ## Building your own driver
 
 `rbench.py` is a module as well as a script. Import `base_app()` and override
-only what differs; `bench`'s builder replaces rather than accumulates, so
-everything you do not name stays identical to the plain run:
+only what differs; everything you do not name stays identical to the plain
+run:
 
 ```python
 import rbench as rb
 
-@dataclass(frozen=True)
-class Params(rb.Params):
+class Params(rb.Params):  # no @dataclass: bench makes it one, frozen and keyword-only
     my_flag: int = 5
 
 app = rb.base_app(Params).with_env(lambda ctx: {**rb.bench_env(ctx.params), ...})
 ```
+
+`with_env` merges into the sealed environment; replacing a setting `base_app`
+already made (the command, the metrics, the controller, ...) takes
+`override=True`, or `bench` warns that it is overriding it. Run the app with
+`rb.main(app)` rather than `app.main()` to keep the `--show FILE` spelling (`bench`
+itself now takes `show FILE` as a subcommand).
 
 `rbench_perf.py` is the worked example: it changes the command, the metrics and
 the output tree, and inherits the corpus, the sizes, the shuffle seed and the
@@ -343,7 +370,9 @@ The five BSD-3-Clause suites were ported from the **R Benchmark Suite (RB)**,
 `# Upstream:` comment pointing back to it. RB had itself repackaged several from
 their own upstreams; both links are in each `ORIGIN.md`.
 
-The harnesses (`harness*.R`), `marker.c` and the drivers are this repository's
-own work, under the MIT license — see [`LICENSE`](LICENSE). The vendored suites
+The harnesses (`harness*.R`), `marker.c`, the drivers and `profile/` are this
+repository's own work, under the MIT license — see [`LICENSE`](LICENSE).
+`profile/perf-rules.R` comes from the VMIL26 paper artifact; see
+[`profile/ORIGIN.md`](profile/ORIGIN.md). The vendored suites
 keep the licenses above; those are the upstreams' terms and are not ours to
 change.

@@ -54,8 +54,10 @@ if (exists("setup") && is.function(setup)) {
 
 # A phase of its own so that neither its cost nor `setup`'s garbage lands in
 # `execute`.
+# `gc()` and not `gc(full = TRUE)`: `full` only exists from R 3.5.0, where it
+# defaults to TRUE, and before that every `gc()` collected all generations.
 t0 <- now()
-invisible(gc(full = TRUE))
+invisible(gc())
 t1 <- now()
 mark("gc", t0, t1)
 
