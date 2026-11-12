@@ -1,11 +1,4 @@
 #!/usr/bin/env -S uv run --script --quiet
-# /// script
-# requires-python = ">=3.12"
-# dependencies = ["bench"]
-#
-# [tool.uv.sources]
-# bench = { git = "https://github.com/PRL-PRG/bench.git", rev = "4639a83a664901d83db3637bab863374878e96ac" }
-# ///
 """Defines and runs the R benchmark corpus.
 """
 import csv

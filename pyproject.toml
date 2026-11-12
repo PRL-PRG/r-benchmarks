@@ -6,9 +6,10 @@ requires-python = ">=3.12"
 license = "MIT"
 dependencies = ["bench"]
 
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+[tool.uv.sources]
+bench = { git = "https://github.com/PRL-PRG/bench.git" }
 
-[tool.hatch.build.targets.wheel]
-only-include = ["rbench.py", "rbench_perf.py"]
+[tool.pyright]
+venvPath= "."
+venv= ".venv"
+pythonVersion = "3.12"
