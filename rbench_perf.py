@@ -4,26 +4,24 @@
 # dependencies = ["bench"]
 #
 # [tool.uv.sources]
-# bench = { git = "https://github.com/PRL-PRG/bench.git", rev = "7bc2cbbfd96ebbf4cd52f67054d5b04f52247b78" }
+# bench = { git = "https://github.com/PRL-PRG/bench.git", rev = "4639a83a664901d83db3637bab863374878e96ac" }
 # ///
 """Profile the R benchmark corpus with `perf record`."""
 
-from dataclasses import dataclass, field
+from dataclasses import field
 from pathlib import Path
-
-from functools import cache
-
-from bench.run import default_reporter
 
 import rbench as rb
 from bench import (
+    ByBenchmarkMetricSummary,
     Context,
-    DirReporter,
     PerfRecord,
+    Time,
+    default_success,
 )
 
 
-@dataclass(frozen=True)
+# No `@dataclass`: `bench.Params` subclasses are dataclasses already.
 class Params(rb.Params):
     # One recording per run, and one `execute()` inside it: harness_instrument.R
     # runs the kernel exactly once, so there is no iteration loop to size.
@@ -48,22 +46,17 @@ class Params(rb.Params):
     )
 
 
-@cache
-def _dir_reporter(root: Path) -> DirReporter:
-    return DirReporter(root)
-
-
 def _perf(ctx: Context[Params]) -> PerfRecord:
+    """`perf record` around each execution. It writes `perf.data` and
+    `perf-frames.csv` into the same `<dir>/<suite>/<bench>/<variant>/<run>/`
+    the dir reporter puts that run's stdout in, MARK lines included."""
     p = ctx.params
-    out_dir = _dir_reporter(Path(p.dir)).output_dir(
-        ctx.suite, ctx.benchmark, ctx.variant
-    )
     return PerfRecord(
+        Path(p.dir),
         freq=p.freq,
         call_graph=p.call_graph,
         stack_size=p.stack_size,
         frames=p.frames,
-        out_dir=out_dir,
     )
 
 
@@ -71,14 +64,21 @@ def _perf(ctx: Context[Params]) -> PerfRecord:
 # where the output goes. Everything else is `base_app`'s.
 app = (
     rb.base_app(Params)
-    .with_command(rb.instrument_cmd)
-    .with_metric()  # no iteration metric; keeps the intrinsic `elapsed` sample
-    .with_process_metric(lambda ctx: (_perf(ctx),))
-    .with_warmup(0)
-    .with_runs(1)
-    .with_reporter(lambda ctx: default_reporter(ctx, dir=_dir_reporter(Path(ctx.params.dir))))
+    .with_command(rb.instrument_cmd, override=True)
+    # No iteration metric, so no iteration to require and none to flag as a
+    # warm-up; `elapsed` stays, `max_rss` goes, and the recording's own counts
+    # (`perf_data_size`, `perf_samples`, `perf_frames`) come from `PerfRecord`.
+    .with_metric(Time(), override=True)
+    .with_success(default_success, override=True)
+    .with_controller(_perf, override=True)
+    .with_warmup(0, override=True)
+    .with_runs(1, override=True)
+    # Nothing to rank: there is no `runtime`, so the geomean block would only
+    # say that it found none.
+    .with_summary(ByBenchmarkMetricSummary(), override=True)
+    .with_reporter(lambda p: rb.reporter(p, dir=p.dir), override=True)
 )
 
 
 if __name__ == "__main__":
-    raise SystemExit(app.main())
+    rb.main(app)

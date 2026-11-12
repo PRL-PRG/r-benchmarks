@@ -4,33 +4,46 @@
 # dependencies = ["bench"]
 #
 # [tool.uv.sources]
-# bench = { git = "https://github.com/PRL-PRG/bench.git", rev = "7bc2cbbfd96ebbf4cd52f67054d5b04f52247b78" }
+# bench = { git = "https://github.com/PRL-PRG/bench.git", rev = "4639a83a664901d83db3637bab863374878e96ac" }
 # ///
 """Defines and runs the R benchmark corpus.
 """
+import csv
+import dataclasses
 import os
-from collections.abc import Iterator, Sequence
-from dataclasses import dataclass, field
+import re
+import sys
+from collections.abc import Sequence
+from dataclasses import field
 from pathlib import Path
+from typing import Any
 
 from bench import (
+    RUNNER_GROUP,
+    REPORTER_GROUP,
+    ByBenchmarkMetricSummary,
+    ComparisonSummary,
     Context,
-    Diagnostic,
-    FixedRuns,
-    GeomeanSummary,
-    HarnessHandle,
-    Regex,
-    Results,
+    Controller,
+    CsvReporter,
+    Execution,
+    Fingerprint,
+    GeomeanComparisonSummary,
+    InvocationResult,
+    Probe,
+    RegexMetric,
+    Report,
     SharedBenchParams,
     Summary,
-    SummaryReporter,
     SuiteBuilder,
-    SystemEnvironment,
+    SystemProbe,
+    Time,
     bench,
     bench_app,
     default_reporter,
-    line_monitor,
+    default_success,
     max_rss,
+    stdout_metric_source,
     suite,
 )
 
@@ -49,7 +62,8 @@ SHUFFLE_SEED = 20260810
 PROFILE_VAR = "RBENCH_PROFILE"
 
 
-@dataclass(frozen=True)
+# No `@dataclass` here or in a subclass: `bench.Params` makes every subclass a
+# frozen, keyword-only dataclass itself, and decorating it again is a TypeError.
 class Params(SharedBenchParams):
     R: Path = Path("R")
     benchmarks: Path | None = field(
@@ -86,6 +100,29 @@ class Params(SharedBenchParams):
             "being compared.",
         },
     )
+    # `bench` used to provide these two; it no longer does, so they live here
+    # to keep the driver's command line what it was.
+    numa: int | None = field(
+        default=None,
+        metadata={
+            "group": RUNNER_GROUP,
+            "metavar": "NODE",
+            "help": "Bind CPUs and memory to this NUMA node (`numactl`). Unset "
+            "(the default) leaves placement to the kernel, which on a "
+            "multi-socket machine can put a process's memory on a different "
+            "socket than its core.",
+        },
+    )
+    csv_merge: bool = field(
+        default=False,
+        metadata={
+            "group": REPORTER_GROUP,
+            "help": "Keep the rows of benchmarks this run did not measure, instead "
+            "of replacing the whole file. Lets a run restricted to a subset "
+            "update those benchmarks in an existing CSV and leave the others "
+            "alone.",
+        },
+    )
 
 
 # Environment the benchmarks inherit. `env` on an Invocation *replaces* the
@@ -116,16 +153,21 @@ def bench_env(p: Params) -> dict[str, str]:
     }
 
 
-def diagnostics(p: Params) -> list[Diagnostic]:
-    """Report anything about this run that a reader of its numbers should know."""
-    hook = os.environ.get(PROFILE_VAR)
-    if not hook:
-        return []
-    return [
-        Diagnostic(
-            "info", f"{PROFILE_VAR}={hook} is sourced before every benchmark."
-        )
-    ]
+class ProfileProbe(Probe):
+    """Report anything about this run that a reader of its numbers should know.
+
+    `bench` has no hook for a driver's own diagnostics any more, so the fact
+    that `RBENCH_PROFILE` was in effect goes into the run's fingerprint (the
+    JSON report and the CSV preamble) and is said once on stderr.
+    """
+
+    def collect(self) -> Fingerprint | None:
+        hook = os.environ.get(PROFILE_VAR)
+        if not hook:
+            return None
+        print(f"{PROFILE_VAR}={hook} is sourced before every benchmark.",
+              file=sys.stderr)
+        return Fingerprint({"rbench_profile": hook})
 
 
 def benchmark_root(p: Params) -> Path:
@@ -166,13 +208,26 @@ def bench_file(ctx: Context[Params]) -> Path:
 
 
 def _r_cmd(p: Params, harness: str, *args: object) -> list[str]:
-    """`R --vanilla -f <harness> --args <args>`, `harness` from `_BUNDLED`.
+    """`R --slave --vanilla -f <harness> --args <args>`, `harness` from `_BUNDLED`.
 
-    (`--no-echo` is spelled `--slave` before R 4.0.)
+    `--slave` and not `--no-echo`: R 4.0 renamed the flag but still accepts the
+    old spelling silently (checked on 4.6.1), while `--no-echo` does not exist
+    before 4.0. One spelling therefore runs every R from 3.0 on, without asking
+    the binary its version first (R-devel's `--version` does not even print a
+    number).
+
+    `--numa N` prefixes `numactl`, which `exec`s into R and so adds no process
+    to the tree a profiler records.
     """
+    numa = (
+        ["numactl", f"--cpunodebind={p.numa}", f"--membind={p.numa}"]
+        if p.numa is not None
+        else []
+    )
     return [
+        *numa,
         str(p.R),
-        "--no-echo",
+        "--slave",
         "--vanilla",
         "-f",
         str(_BUNDLED / harness),
@@ -198,20 +253,6 @@ def instrument_cmd(ctx: Context[Params]) -> list[str]:
     down to `execute` alone.
     """
     return _r_cmd(ctx.params, "harness_instrument.R", bench_file(ctx), ctx.data.arg)
-
-
-def _iteration_monitor(handle: HarnessHandle) -> Iterator[str]:
-    """Frame each harness `started -> completed` block into one iteration."""
-    buf: list[str] = []
-    for line in line_monitor(handle):
-        if ", iteration" in line and "started ======" in line:
-            buf = [line]
-        elif ", iteration" in line and "completed in " in line:
-            buf.append(line)
-            yield "\n".join(buf)
-            buf = []
-        elif buf:
-            buf.append(line)
 
 
 are_we_fast = suite_of(
@@ -423,22 +464,27 @@ SUITES = (
 # metric everything downstream reads; the other two are what make the
 # memory-management cost and an accidentally threaded run visible instead of
 # folded into `runtime`.
-def metrics() -> tuple[Regex, ...]:
+#
+# Read off the whole of the process's stdout, the n-th match being iteration n
+# (warm-ups included, as the harness numbers them): `bench` no longer frames a
+# streaming harness, it parses the output once the process has exited.
+def metrics() -> tuple[RegexMetric, ...]:
+    def m(name: str, regex: str) -> RegexMetric:
+        return RegexMetric(
+            name, regex, stdout_metric_source, unit="ms", iterate=True
+        ).lower_is_better()
+
     return (
-        Regex(
-            "runtime", r"iteration \d+ completed in ([\d.]+) ms", unit="ms"
-        ).lower_is_better(),
-        Regex(
-            "gc", r"completed in [\d.]+ ms \(gc ([\d.]+) ms", unit="ms"
-        ).lower_is_better(),
-        Regex("cpu", r"completed in .*cpu ([\d.]+) ms\)", unit="ms").lower_is_better(),
+        m("runtime", r"iteration \d+ completed in ([\d.]+) ms"),
+        m("gc", r"completed in [\d.]+ ms \(gc ([\d.]+) ms"),
+        m("cpu", r"completed in .*cpu ([\d.]+) ms\)"),
     )
 
 
-def summary(axis: str | Sequence[str] = "run") -> SummaryReporter:
+def summary(axis: str | Sequence[str] = "run") -> Summary:
     """The report's summary block, ranked over `axis` of the matrix.
 
-    `GeomeanSummary` ranks the values of `axis` by the geometric mean of
+    The geomean block ranks the values of `axis` by the geometric mean of
     `runtime` over a suite, so a difference spread thinly over a hundred
     benchmarks is one line. Only `runtime`: `gc` and `cpu` diagnose a single
     benchmark and a geomean of either says nothing.
@@ -447,13 +493,157 @@ def summary(axis: str | Sequence[str] = "run") -> SummaryReporter:
     comparison -- every run is the same program, so a spread between them is the
     machine's. A driver that varies something real passes its own.
     """
-    return SummaryReporter(
-        Results() & Summary() & GeomeanSummary(axis=axis, metrics="runtime")
+    return (
+        ByBenchmarkMetricSummary()
+        & ComparisonSummary()
+        & GeomeanComparisonSummary(axis=axis).on_metrics("runtime")
     )
 
 
+class InProcessWarmup(Controller):
+    """Flag the first `warmups` iterations of every execution as warm-up.
+
+    `bench`'s warm-up policy counts whole processes, but here one process is one
+    run of `warmups + iterations` iterations, of which the first `warmups` do not
+    count. This puts the flag where the stats, the CSV and the summary read it.
+    """
+
+    def __init__(self, warmups: int) -> None:
+        super().__init__()
+        self.warmups = warmups
+
+    def extract_execution(self, b, result: InvocationResult, run: int) -> Execution:
+        e = super().extract_execution(b, result, run)
+        its = [
+            dataclasses.replace(it, warmup=True) if i < self.warmups else it
+            for i, it in enumerate(e.iterations)
+        ]
+        return dataclasses.replace(e, iterations=its)
+
+
+_COMPLETED = re.compile(r"iteration \d+ completed in ")
+NO_ITERATIONS = "no iterations parsed from harness output"
+
+
+def harness_success(result: InvocationResult) -> str | None:
+    """A clean exit that printed no iteration is a failure too, not a run with
+    no samples."""
+    verdict = default_success(result)
+    if verdict is None and not _COMPLETED.search(result.stdout or ""):
+        return NO_ITERATIONS
+    return verdict
+
+
+# The CSV schema this driver has always written, kept stable for whatever reads
+# it downstream: one row per sample, iteration samples first, then the
+# whole-process ones with `iteration`/`warmup` blank; a failure is a row with a
+# blank metric. `run` appears twice, as it always has (the execution counter,
+# then the matrix axis, whose value wins in both).
+_CSV_TAIL = ["iteration", "warmup", "metric", "value", "unit", "lower_is_better",
+             "outlier", "failure"]
+
+
+class RbenchCsvReporter(CsvReporter):
+    """`bench`'s CSV sink with the schema above and `--csv-merge`.
+
+    With `merge`, the rows of the (suite, benchmark) pairs this run produced
+    replace their old counterparts and the rest of an existing file is carried
+    over, so re-measuring a subset (`--include`) does not discard the others. A
+    file with a different header is not merged. The merged file is not one
+    session, and its preamble says so.
+    """
+
+    def __init__(self, path: Path, *, merge: bool = False) -> None:
+        super().__init__(path)
+        self.merge = merge
+
+    def _carried(self, cols: list[str], report: Report):
+        if not self.path.exists():
+            return [], set()
+        measured = {(e.suite, e.benchmark) for e in report.executions}
+        with open(self.path, newline="") as f:
+            lines = [ln for ln in f if not ln.startswith("#")]
+        if not lines:
+            return [], set()
+        rdr = csv.reader(lines, delimiter=self.delimiter)
+        if next(rdr, None) != cols:
+            return [], set()
+        kept, names = [], set()
+        for row in rdr:
+            key = (row[0], row[1])
+            if key not in measured:
+                kept.append(row)
+                names.add(f"{key[0]}/{key[1]}")
+        return kept, names
+
+    def finalize(self, report: Report) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        vcols = report.variant_keys()
+        cols = ["suite", "benchmark", "run", *vcols, *_CSV_TAIL]
+        carried, names = self._carried(cols, report) if self.merge else ([], set())
+
+        def row(base: dict[str, Any], it: Any, warmup: Any, s=None, failure=""):
+            r = {**base, "iteration": it, "warmup": warmup}
+            if s is None:
+                return r | dict.fromkeys(_CSV_TAIL[2:], "") | {"failure": failure}
+            lib = {"lower better": "True", "higher better": "False"}
+            return r | {
+                "metric": s.metric,
+                "value": s.value,
+                "unit": s.unit,
+                "lower_is_better": lib.get(s.direction, ""),
+                "outlier": str(bool(s.extra.get("outlier", False))),
+                "failure": "",
+            }
+
+        with open(self.path, "w", newline="") as f:
+            for k, v in (report.fingerprint or {}).items():
+                v = ", ".join(map(str, v)) if isinstance(v, list) else v
+                f.write(f"# {k}: {v}\n")
+            if carried:
+                f.write(
+                    f"# merged: {len(names)} benchmark(s) carried over from the "
+                    "previous contents of this file; the environment above "
+                    "describes this run only\n"
+                )
+            w = csv.writer(f, delimiter=self.delimiter)
+            w.writerow(cols)
+            w.writerows(carried)
+
+            def put(r: dict[str, Any]) -> None:
+                w.writerow([r.get(c, "") for c in cols])
+
+            for e in report.executions:
+                base = {"suite": e.suite, "benchmark": e.benchmark, "run": e.run}
+                base |= {k: e.variant.get(k, "") for k in vcols}
+                for i, it in enumerate(e.iterations):
+                    for s in it.samples:
+                        put(row(base, i, str(it.warmup), s))
+                if e.is_failure():
+                    # The iteration that did not complete, whether or not any
+                    # did before it. Whole-process samples of a failed process
+                    # are not reported.
+                    put(row(base, len(e.iterations), "False", failure=e.failure))
+                    continue
+                for s in e.process_samples:
+                    put(row(base, "", "", s))
+                if not e.iterations and not e.process_samples:
+                    put(row(base, "", ""))
+
+
+def reporter(p: Params, **defaults: Any):
+    """`bench`'s reporter bundle with this driver's CSV sink in it."""
+    if p.csv:
+        defaults["csv"] = RbenchCsvReporter(Path(p.csv), merge=p.csv_merge)
+    return default_reporter(p, **defaults)
+
+
 def base_app(params: type = Params):
-    """The corpus wired to the harness. `params` swaps in a driver's own flags."""
+    """The corpus wired to the harness. `params` swaps in a driver's own flags.
+
+    The builder's setters warn when they replace a value already set, so a
+    driver that changes one of these passes `override=True`.
+    """
     return (
         bench_app()
         .with_params(params)
@@ -465,30 +655,36 @@ def base_app(params: type = Params):
         .with_matrix(run=lambda ctx: range(ctx.params.runs))
         # Also decides how `--include` sees a benchmark: with a label a variant
         # renders `suite/bench/run0`, without one `suite/bench (run=0)`.
-        .with_label(lambda b: f"run{b.run}")
+        .with_label(lambda b: f"run{b.variant['run']}")
         .with_command(_cmd)
         .with_env(lambda ctx: bench_env(ctx.params))
-        .with_harness(monitor=_iteration_monitor)
-        .with_warmup(lambda ctx: FixedRuns(ctx.params.warmups))
-        # `bench`'s `runs` is the number of measured iterations it expects the
-        # harness to report, which is this driver's `iterations`.
-        .with_runs(lambda ctx: FixedRuns(ctx.params.iterations))
-        .with_metric(lambda ctx: metrics())
-        .with_process_metric(max_rss())
+        # One process per variant, its warm-ups flagged inside it.
+        .with_warmup(0)
+        .with_runs(1)
+        .with_controller(lambda ctx: InProcessWarmup(ctx.params.warmups))
+        .with_success(harness_success)
+        .with_metric(*metrics(), Time(), max_rss())
         # Snapshot the machine into the report and run the noise checks, so a
         # run carries the state it was measured in (and says so when it is bad).
-        .with_environment(SystemEnvironment())
-        .with_diagnostics(diagnostics)
-        # Passed as `default_reporter`'s `summary` and not on its own: a bare
-        # `SummaryReporter` replaces the whole bundle, which silently turns off
-        # the progress bar and the --json/--csv/--dir sinks.
-        .with_reporter(lambda ctx: default_reporter(ctx, summary=summary()))
-        .add_all(*SUITES)
+        .with_probe(SystemProbe() & ProfileProbe())
+        .with_summary(summary())
+        .with_reporter(reporter)
+        .add(*SUITES)
     )
 
 
 app = base_app()
 
 
+def main(app=app, argv: list[str] | None = None) -> None:
+    """`app.main()`, still taking `--show FILE`: `bench` turned that flag into a
+    `show FILE` subcommand, which has to come after every option."""
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if "--show" in argv:
+        i = argv.index("--show")
+        argv = [*argv[:i], *argv[i + 2:], "show", *argv[i + 1:i + 2]]
+    app.main(argv)
+
+
 if __name__ == "__main__":
-    raise SystemExit(app.main())
+    main()
