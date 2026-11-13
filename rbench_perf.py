@@ -150,12 +150,10 @@ INSTRUMENT_APP = (
     .with_command(
         lambda ctx: instrument_harness_default_cmd(
             ctx.params.R,
-            Path(ctx.params.get_dir()) / "marker.so",
+            ctx.params.get_dir() / "marker.so",
             ctx,
         )
     )
-    .with_cwd(lambda ctx: rb.BENCHMARKS_FOLDER / ctx.suite)
-    .with_env(rb.DEFAULT_ENV)
     # Control
     .with_runs(1)
     .with_controller(get_perf)
