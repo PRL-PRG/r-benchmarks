@@ -9,8 +9,10 @@ from typing import Iterable
 import rbench as rb
 from bench import *
 
-DEFAULT_PERF_DIR = Path().cwd() / "output/perf"
+_HERE = Path(__file__).resolve().parent
+PERF_SUBFOLDER = _HERE / "perf"
 
+DEFAULT_PERF_DIR = Path().cwd() / "output/perf"
 
 class RbenchProfileParams(SharedBenchParams, rb.DefaultRbenchParams):
     R: Path = rb.default_R()
@@ -55,7 +57,7 @@ def instrument_harness_default_cmd(
         Rpath,
         ctx,
         lambda file: [
-            str(rb.BENCHMARKS_FOLDER / "harness_instrument.R"),
+            str(PERF_SUBFOLDER / "harness_instrument.R"),
             file,
             str(marker),
             str(ctx.data.arg),
@@ -94,7 +96,7 @@ class CompileMarkerHook(Hook):
                     str(self.R),
                     "CMD",
                     "SHLIB",
-                    str(rb.BENCHMARKS_FOLDER / "marker.c"),
+                    str(PERF_SUBFOLDER / "marker.c"),
                     "-o",
                     str(self.result_dir / "marker.so"),
                 ],
