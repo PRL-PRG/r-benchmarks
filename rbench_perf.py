@@ -154,7 +154,7 @@ INSTRUMENT_APP = (
     # Result
     .with_metric(Time(), MarkMetric())
     .with_probe(SystemProbe())
-    .with_summary(ByBenchmarkMetricSummary())
+    .with_summary(ByBenchmarkMetricSummary().on_metrics("elapsed"))
 )
 
 if __name__ == "__main__":
