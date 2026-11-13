@@ -25,6 +25,9 @@
             packages = with pkgs; [
               uv
               python315
+
+              perf
+              R
             ];
 
             shellHook = ''

@@ -14,7 +14,7 @@ wheels = [
 [[package]]
 name = "bench"
 version = "0.1.0"
-source = { git = "https://github.com/PRL-PRG/bench.git?rev=4639a83a664901d83db3637bab863374878e96ac#4639a83a664901d83db3637bab863374878e96ac" }
+source = { git = "https://github.com/PRL-PRG/bench.git#4639a83a664901d83db3637bab863374878e96ac" }
 dependencies = [
     { name = "cattrs" },
     { name = "rich" },
@@ -72,7 +72,7 @@ dependencies = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "bench", git = "https://github.com/PRL-PRG/bench.git?rev=4639a83a664901d83db3637bab863374878e96ac" }]
+requires-dist = [{ name = "bench", git = "https://github.com/PRL-PRG/bench.git" }]
 
 [[package]]
 name = "rich"

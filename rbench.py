@@ -6,10 +6,11 @@ import dataclasses
 import os
 import re
 import sys
+import shutil
 from collections.abc import Sequence
 from dataclasses import field
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 from bench import *
 
@@ -17,8 +18,85 @@ _HERE = Path(__file__).resolve().parent
 BENCHMARKS_FOLDER = _HERE / "benchmarks"
 
 # ------------------------------------------------------------
+# DEFAULTS
+# ------------------------------------------------------------
+
+
+class DefaultRbenchParams(Params):
+    runs: int = field(
+        default=5,
+        metadata={
+            "metavar": "N",
+            "help": "Measure each benchmark in N separate R processes.",
+        },
+    )
+    iterations: int = field(
+        default=4,
+        metadata={
+            "metavar": "N",
+            "help": "Iterations inside each run.",
+        },
+    )
+
+
+DEFAULT_ENV = {
+    "OPENBLAS_NUM_THREADS": "1",
+    "OMP_NUM_THREADS": "1",
+    "MKL_NUM_THREADS": "1",
+    "VECLIB_MAXIMUM_THREADS": "1",
+    "R_LIBS": "",
+    "R_LIBS_USER": "",
+    "R_LIBS_SITE": "",
+}
+
+
+def inherit_shell_env() -> Env:
+    return {
+        k: os.environ[k]
+        for k in [
+            "PATH",
+            "HOME",
+            "SHELL",
+            "USER",
+            "TMPDIR",
+            "LD_LIBRARY_PATH",
+            "LANG",
+            "LC_ALL",
+            "LC_COLLATE",
+            "TZ",
+            "R_DISABLE_BYTECODE",
+        ]
+    }
+
+
+def default_cmd(
+    Rpath: Path,
+    ctx: Context[DefaultRbenchParams],
+    args: Callable[[str], Sequence[str]],
+    # Call with the path to benchmark
+    # Return the harness to run (first arg) and its arguments
+) -> Command:
+    """
+    Rpath is the path to the R binary tha shall be executed
+    """
+    benchmark = str(BENCHMARKS_FOLDER / ctx.suite / (ctx.benchmark + ".R"))
+    concrete_args = args(benchmark)
+
+    return [
+        str(Rpath),
+        "--no-echo",
+        "--vanilla",
+        "-f",
+        concrete_args[0],
+        "--args",
+        *concrete_args[1:],
+    ]
+
+
+# ------------------------------------------------------------
 # SUITE DEFINITION
 # ------------------------------------------------------------
+
 
 ARE_WE_FAST = suite(
     "areWeFast",
@@ -43,46 +121,79 @@ REAL_THING = suite(
 # input named after their size, `fasta/fasta<size>.txt`, so their size has to be
 # one of the files that exist (10, 100, 1000..5000, 10000, 50000, 100000, 150000,
 # 300000, 500000) - any other value fails to open the file rather than running
-# longer. analysis/calibrate-sizes.py snaps them to the nearest available.
+# longer.
 SHOOTOUT = suite(
     "shootout",
-    bench("binarytrees/binarytrees", arg=12),
-    bench("binarytrees/binarytrees_2", arg=12),
-    bench("binarytrees/binarytrees_naive", arg=12),
-    bench("fannkuch/fannkuchredux", arg=9),
-    bench("fannkuch/fannkuchredux_naive", arg=9),
-    bench("fasta/fasta", arg=120000),
-    bench("fasta/fasta_2", arg=112000),
-    bench("fasta/fasta_3", arg=86000),
-    bench("fasta/fasta_naive", arg=102000),
-    bench("fasta/fasta_naive_2", arg=64000),
-    bench("fastaredux/fastaredux", arg=150000),
-    bench("fastaredux/fastaredux_naive", arg=110000),
-    bench("knucleotide/knucleotide", arg=3000),
-    bench("knucleotide/knucleotide_brute", arg=2000),
-    bench("knucleotide/knucleotide_brute_2", arg=3000),
-    bench("knucleotide/knucleotide_brute_3", arg=2000),
-    bench("mandelbrot/mandelbrot_ascii", arg=1700),
-    bench("mandelbrot/mandelbrot_naive_ascii", arg=370),
-    bench("mandelbrot/mandelbrot_noout", arg=3200),
-    bench("mandelbrot/mandelbrot_noout_naive", arg=2161),
-    bench("nbody/nbody", arg=25000),
-    bench("nbody/nbody_2", arg=12000),
-    bench("nbody/nbody_3", arg=25000),
-    bench("nbody/nbody_naive", arg=25000),
-    bench("nbody/nbody_naive_2", arg=25000),
-    bench("pidigits/pidigits", arg=112),
-    bench("regexdna/regexdna", arg=500000),
-    bench("reversecomplement/reversecomplement", arg=300000),
-    bench("reversecomplement/reversecomplement_2", arg=300000),
-    bench("reversecomplement/reversecomplement_naive", arg=100000),
-    bench("spectralnorm/spectralnorm", arg=220),
-    bench("spectralnorm/spectralnorm_alt", arg=4989),
-    bench("spectralnorm/spectralnorm_alt_2", arg=1200),
-    bench("spectralnorm/spectralnorm_alt_3", arg=250),
-    bench("spectralnorm/spectralnorm_alt_4", arg=318),
-    bench("spectralnorm/spectralnorm_math", arg=1200),
-    bench("spectralnorm/spectralnorm_naive", arg=303),
+    suite(
+        "binarytrees",
+        bench("binarytrees", arg=12),
+        bench("binarytrees_2", arg=12),
+        bench("binarytrees_naive", arg=12),
+    ),
+    suite(
+        "fannkuch",
+        bench("fannkuchredux", arg=9),
+        bench("fannkuchredux_naive", arg=9),
+    ),
+    suite(
+        "fasta",
+        bench("fasta", arg=120000),
+        bench("fasta_2", arg=112000),
+        bench("fasta_3", arg=86000),
+        bench("fasta_naive", arg=102000),
+        bench("fasta_naive_2", arg=64000),
+    ),
+    suite(
+        "fastaredux",
+        bench("fastaredux", arg=150000),
+        bench("fastaredux_naive", arg=110000),
+    ),
+    suite(
+        "knucleotide",
+        bench("knucleotide", arg=3000),
+        bench("knucleotide_brute", arg=2000),
+        bench("knucleotide_brute_2", arg=3000),
+        bench("knucleotide_brute_3", arg=2000),
+    ),
+    suite(
+        "mandelbrot",
+        bench("mandelbrot_ascii", arg=1700),
+        bench("mandelbrot_naive_ascii", arg=370),
+        bench("mandelbrot_noout", arg=3200),
+        bench("mandelbrot_noout_naive", arg=2161),
+    ),
+    suite(
+        "nbody",
+        bench("nbody", arg=25000),
+        bench("nbody_2", arg=12000),
+        bench("nbody_3", arg=25000),
+        bench("nbody_naive", arg=25000),
+        bench("nbody_naive_2", arg=25000),
+    ),
+    suite(
+        "pidigits",
+        bench("pidigits", arg=112),
+    ),
+    suite(
+        "regexdna",
+        bench("regexdna", arg=500000),
+    ),
+    suite(
+        "reversecomplement",
+        bench("reversecomplement", arg=300000),
+        bench("reversecomplement_2", arg=300000),
+        bench("reversecomplement_naive", arg=100000),
+    ),
+    suite(
+        "spectralnorm",
+        bench("spectralnorm", arg=220),
+        bench("spectralnorm_alt", arg=4989),
+        bench("spectralnorm_alt_2", arg=1200),
+        bench("spectralnorm_alt_3", arg=250),
+        bench("spectralnorm_alt_4", arg=318),
+        bench("spectralnorm_math", arg=1200),
+        bench("spectralnorm_naive", arg=303),
+    ),
 )
 
 SPEED_TEST = suite(
@@ -197,91 +308,21 @@ RIPOSTE = suite(
     bench("smv_builtin", arg=6),
 )
 
-ALL_SUITES = suite(
-    "",
-    ARE_WE_FAST,
-    REAL_THING,
-    SHOOTOUT,
-    SPEED_TEST,
-    MATHKERNEL,
-    MISC,
-    R_BENCHMARK_25,
-    RIPOSTE,
+ALL_SUITES = (
+    suite(
+        "",
+        ARE_WE_FAST,
+        REAL_THING,
+        SHOOTOUT,
+        SPEED_TEST,
+        MATHKERNEL,
+        MISC,
+        R_BENCHMARK_25,
+        RIPOSTE,
+    )
+    .with_cwd(lambda ctx: BENCHMARKS_FOLDER / ctx.suite)
+    .with_env(DEFAULT_ENV)
 )
-
-# ------------------------------------------------------------
-# DEFAULTS
-# ------------------------------------------------------------
-
-
-class DefaultRbenchParams(Params):
-    runs: int = field(
-        default=5,
-        metadata={
-            "metavar": "N",
-            "help": "Measure each benchmark in N separate R processes.",
-        },
-    )
-    iterations: int = field(
-        default=4,
-        metadata={
-            "metavar": "N",
-            "help": "Iterations inside each run.",
-        },
-    )
-
-
-DEFAULT_ENV = {
-    "OPENBLAS_NUM_THREADS": "1",
-    "OMP_NUM_THREADS": "1",
-    "MKL_NUM_THREADS": "1",
-    "VECLIB_MAXIMUM_THREADS": "1",
-    "R_LIBS": "",
-    "R_LIBS_USER": "",
-    "R_LIBS_SITE": "",
-}
-
-
-def inherit_shell_env() -> Env:
-    return {
-        k: os.environ[k]
-        for k in [
-            "PATH",
-            "HOME",
-            "SHELL",
-            "USER",
-            "TMPDIR",
-            "LD_LIBRARY_PATH",
-            "LANG",
-            "LC_ALL",
-            "LC_COLLATE",
-            "TZ",
-            "R_DISABLE_BYTECODE",
-        ]
-    }
-
-
-def default_cmd(
-    Rpath: Path,
-    ctx: Context[DefaultRbenchParams],
-    harness: Path,
-    *args: str,
-) -> Command:
-    """
-    Rpath is the path to the R binary tha shall be executed
-    """
-    return [
-        str(Rpath),
-        "--no-echo",
-        "--vanilla",
-        "-f",
-        str(harness),
-        "--args",
-        str(BENCHMARKS_FOLDER / ctx.suite / ctx.benchmark),
-        *args,
-    ]
-
-
 # ------------------------------------------------------------
 # DEFAULT HARNESS INSTRUMENTATION
 # ------------------------------------------------------------
@@ -300,7 +341,7 @@ class RbenchHarnessSuccess:
 class RbenchHarnessMetric(Metric):
     REGEX = re.compile(
         r"^====== .+?, iteration (?P<iteration>\d+) completed in (?P<runtime>-?\d+\.\d{3}) ms "
-        r"\(gc (?P<gc>-?\d+\.\d{3}) ms, forced-gc (?P<forced-gc>-?\d+\.\d{3}) ms, cpu (?P<cpu>-?\d+\.\d{3}) ms\) ======$",
+        r"\(gc (?P<gc>-?\d+\.\d{3}) ms, forced-gc (?P<forced_gc>-?\d+\.\d{3}) ms, cpu (?P<cpu>-?\d+\.\d{3}) ms\) ======$",
         re.MULTILINE,
     )
 
@@ -318,13 +359,12 @@ class RbenchHarnessMetric(Metric):
         for m in self.REGEX.finditer(data.stdout):
             iteration = int(m["iteration"])
 
-            for group in ["runtime", "gc", "forced-gc", "cpu"]:
+            for group in ["runtime", "gc", "forced_gc", "cpu"]:
                 yield self.get_sample(
                     float(m[group]),
                     metric=group,
                     iteration=iteration,
                 )
-
 
 
 def harness_default_cmd(
@@ -335,10 +375,13 @@ def harness_default_cmd(
     return default_cmd(
         Rpath,
         ctx,
-        BENCHMARKS_FOLDER / "harness.R",
-        str(ctx.params.iterations),
-        str(ctx.data.arg),
-        str(profile) if profile is not None else "",
+        lambda file: [
+            str(BENCHMARKS_FOLDER / "harness.R"),
+            file,
+            str(ctx.params.iterations),
+            str(ctx.data.arg),
+            *((str(profile),) if profile is not None else ()),
+        ],
     )
 
 
@@ -346,22 +389,32 @@ def harness_default_cmd(
 # DEFAULT MAIN
 # ------------------------------------------------------------
 
-# def instrument_cmd(ctx: Context[RbenchParams]) -> list[str]:
-#     """The one-shot command: `setup()` then one `execute()`, for a profiler.
-#
-#     `harness.R`'s repeat loop would pollute a recording, so
-#     `harness_instrument.R` runs the kernel exactly once and brackets each phase
-#     with a CLOCK_MONOTONIC `MARK` line, which is what lets a recording be cut
-#     down to `execute` alone.
-#     """
-#     return _r_cmd(ctx.params, "harness_instrument.R", bench_file(ctx), ctx.data.arg)
-
 # Fixed so the shuffled order is reproducible across sessions and drivers.
 SHUFFLE_SEED = 20260810
 
 
+def default_R():
+    help_string = (
+        "A path to the R binary. If R is in path, it is used as default"
+        "Otherwise it needs to be specified"
+    )
+    R = shutil.which("R")
+    if R is None:
+        return field(
+            metadata={
+                "required": True,
+                "help": help_string,
+            },
+        )
+    else:
+        return field(
+            default=Path(R),
+            metadata={"help": help_string},
+        )
+
+
 class RbenchParams(SharedBenchParams, DefaultRbenchParams):
-    R: Path = Path("R")
+    R: Path = default_R()
     warmups: int = field(
         default=1,
         metadata={
@@ -404,8 +457,6 @@ DEFAULT_APP = (
             ctx,
         )
     )
-    .with_cwd(BENCHMARKS_FOLDER)
-    .with_env(DEFAULT_ENV)
     # Control
     .with_runs(lambda ctx: FixedRuns(ctx.params.runs))
     .with_controller(lambda ctx: InProcessWarmup(ctx.params.warmups))
@@ -413,13 +464,7 @@ DEFAULT_APP = (
     .with_success(RbenchHarnessSuccess())
     .with_metric(RbenchHarnessMetric(), Time(), max_rss())
     .with_probe(SystemProbe())
-    .with_summary(
-        (
-            ByBenchmarkMetricSummary()
-            & ComparisonSummary()
-            & GeomeanComparisonSummary(axis="run").on_metrics("runtime")
-        )
-    )
+    .with_summary((ByBenchmarkMetricSummary() & ComparisonSummary()))
 )
 
 if __name__ == "__main__":
