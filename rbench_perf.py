@@ -1,84 +1,169 @@
 #!/usr/bin/env -S uv run --script --quiet
-# /// script
-# requires-python = ">=3.12"
-# dependencies = ["bench"]
-#
-# [tool.uv.sources]
-# bench = { git = "https://github.com/PRL-PRG/bench.git", rev = "7bc2cbbfd96ebbf4cd52f67054d5b04f52247b78" }
-# ///
 """Profile the R benchmark corpus with `perf record`."""
 
-from dataclasses import dataclass, field
+from dataclasses import field
 from pathlib import Path
-
-from functools import cache
-
-from bench.run import default_reporter
+import re
+from typing import Iterable
 
 import rbench as rb
-from bench import (
-    Context,
-    DirReporter,
-    PerfRecord,
-)
+from bench import *
 
+_HERE = Path(__file__).resolve().parent
+PERF_SUBFOLDER = _HERE / "perf"
 
-@dataclass(frozen=True)
-class Params(rb.Params):
-    # One recording per run, and one `execute()` inside it: harness_instrument.R
-    # runs the kernel exactly once, so there is no iteration loop to size.
-    runs: int = 1
-    iterations: int = 1
-    freq: int = 1999  # perf sampling frequency (Hz)
-    # How the stack is obtained: `dwarf` reconstructs it from CFI, `fp` walks
-    # saved frame pointers, `lbr` reads the CPU's branch stack.
-    call_graph: str = "dwarf"
-    stack_size: int = 16384  # dwarf stack dump size (bytes; 16 kB)
-    frames: bool = True  # run `perf script` and write perf-frames.csv
-    # The inherited default is None, which writes no tree; a recording needs
-    # somewhere to go. Relative to the caller's cwd, so recordings do not land
-    # inside this checkout.
-    dir: str = field(
-        default="output/perf",
+DEFAULT_PERF_DIR = Path().cwd() / "output/perf"
+
+PERF_ARG_GROUP = ParamsGroup("perf setup")
+
+class RbenchProfileParams(SharedBenchParams):
+    R: Path = rb.default_R()
+    freq: int = field(
+        default=1999,
         metadata={
-            "metavar": "DIR",
-            "help": "Per-execution tree (stdout/stderr/exitcode/seq + perf.data) "
-            "under DIR.",
+            "metavar": "Hz",
+            "help": "perf sampling frequency",
+            "group": PERF_ARG_GROUP,
+        },
+    )
+    call_graph: str = field(
+        default="dwarf",
+        metadata={
+            "help": "How the stack is obtained: "
+            "`dwarf` reconstructs it from CFI, "
+            "`fp` walks saved frame pointers, "
+            "`lbr` reads the CPU's branch stack.",
+            "choices": ["dwarf", "fp", "lbr"],
+            "group": PERF_ARG_GROUP,
+        },
+    )
+    stack_size: int = field(
+        default=16 * 1024,
+        metadata={
+            "metavar": "bytes",
+            "help": "dwarf stack dump size (16 kB)",
+            "group": PERF_ARG_GROUP,
         },
     )
 
-
-@cache
-def _dir_reporter(root: Path) -> DirReporter:
-    return DirReporter(root)
-
-
-def _perf(ctx: Context[Params]) -> PerfRecord:
-    p = ctx.params
-    out_dir = _dir_reporter(Path(p.dir)).output_dir(
-        ctx.suite, ctx.benchmark, ctx.variant
+    frames: bool = field(
+        default=True,
+        metadata={
+            "help": "Write `perf-frames.csv`.",
+            "group": PERF_ARG_GROUP,
+        },
     )
+
+    def get_dir(self) -> Path:
+        return Path(self.dir).resolve() if self.dir is not None else DEFAULT_PERF_DIR
+
+
+def instrument_harness_default_cmd(
+    Rpath: Path,
+    marker: Path,
+    ctx: Context[Params],
+) -> Command:
+    return rb.default_cmd(
+        Rpath,
+        ctx,
+        lambda file: [
+            str(PERF_SUBFOLDER / "harness_instrument.R"),
+            file,
+            str(marker),
+            str(ctx.data.arg),
+        ],
+    )
+
+
+def get_perf(ctx: Context[RbenchProfileParams]) -> PerfRecord:
+    p = ctx.params
     return PerfRecord(
+        Path(p.get_dir()),
         freq=p.freq,
         call_graph=p.call_graph,
         stack_size=p.stack_size,
         frames=p.frames,
-        out_dir=out_dir,
     )
 
 
-# What a perf run changes: the command, the absence of an iteration loop, and
-# where the output goes. Everything else is `base_app`'s.
-app = (
-    rb.base_app(Params)
-    .with_command(rb.instrument_cmd)
-    .with_metric()  # no iteration metric; keeps the intrinsic `elapsed` sample
-    .with_process_metric(lambda ctx: (_perf(ctx),))
-    .with_warmup(0)
+class CompileMarkerHook(Hook):
+    executed: bool
+    R: Path
+    result_dir: Path
+
+    __slots__ = ("executed", "R", "result_dir")
+
+    def __init__(self, R: Path, result_dir: Path) -> None:
+        self.executed = False
+        self.R = R
+        self.result_dir = result_dir
+
+    def setup(self, benchmark: Benchmark) -> None:
+        if not self.executed:
+            self.result_dir.mkdir(parents=True, exist_ok=True)
+            res = execute(
+                command=[
+                    str(self.R),
+                    "CMD",
+                    "SHLIB",
+                    str(PERF_SUBFOLDER / "marker.c"),
+                    "-o",
+                    str(self.result_dir / "marker.so"),
+                ],
+                cwd=rb.BENCHMARKS_FOLDER,
+                inherit_env=True,
+            )
+
+            if res.returncode != 0:
+                raise BenchError("Failed to compile marker.c\n" + res.stderr)
+
+            self.executed = True
+
+
+class MarkMetric(Metric):
+    REGEX = re.compile(
+        r"^MARK\t(?P<tag>[^\t\n]*)\t(?P<begin>-?\d+\.\d{6})\t(?P<end>-?\d+\.\d{6})$",
+        re.MULTILINE,
+    )
+
+    def __init__(self) -> None:
+        super().__init__("mark", "", "uncomparable")
+
+    def process(self, data: InvocationResult) -> Iterable[Sample]:
+        if data.stdout is None:
+            return
+
+        for m in self.REGEX.finditer(data.stdout):
+            yield self.get_sample(
+                float(m["begin"]),
+                extra={
+                    "end": float(m["end"]),
+                    "tag": m["tag"],
+                },
+            )
+
+
+INSTRUMENT_APP = (
+    bench_app(params=RbenchProfileParams)
+    .add(rb.ALL_SUITES)
+    # Cmd
+    .with_command(
+        lambda ctx: instrument_harness_default_cmd(
+            ctx.params.R,
+            ctx.params.get_dir() / "marker.so",
+            ctx,
+        )
+    )
+    # Control
     .with_runs(1)
-    .with_reporter(lambda ctx: default_reporter(ctx, dir=_dir_reporter(Path(ctx.params.dir))))
+    .with_controller(get_perf)
+    # Prepare
+    .with_hook(lambda ctx: CompileMarkerHook(ctx.params.R, ctx.params.get_dir()))
+    # Result
+    .with_metric(Time(), MarkMetric())
+    .with_probe(SystemProbe())
+    .with_summary(ByBenchmarkMetricSummary().on_metrics("elapsed"))
 )
 
-
 if __name__ == "__main__":
-    raise SystemExit(app.main())
+    INSTRUMENT_APP.main()

@@ -3,12 +3,8 @@ __pycache__/
 output*/
 .venv/
 
-# Benchmark input caches: every one is written by the benchmark's own `setup()`
-# on first run and read back afterwards. Several are large (the riposte sparse
-# matrix is 240 MB), all are reproducible, and none is an input to anything but
-# the benchmark that made it.
+# Benchmark input caches
 benchmarks/**/data/
 
-# Built by `make -C benchmarks marker.so` from marker.c.
-/benchmarks/marker.o
-/benchmarks/marker.so
+/perf/marker.o
+/perf/marker.so

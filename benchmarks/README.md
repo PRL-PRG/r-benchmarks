@@ -10,7 +10,7 @@ only says what the loose files beside the suites are for.
 The harness. Runs one benchmark in one R process:
 
 ```sh
-R --no-echo --vanilla -f harness.R --args <benchmark.R> <iterations> [<size>]
+R --slave --vanilla -f harness.R --args <benchmark.R> <iterations> [<size>]
 ```
 
 Sources `RBENCH_PROFILE` if set, `setwd()`s to the benchmark's own directory,
