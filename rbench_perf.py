@@ -14,33 +14,43 @@ PERF_SUBFOLDER = _HERE / "perf"
 
 DEFAULT_PERF_DIR = Path().cwd() / "output/perf"
 
-class RbenchProfileParams(SharedBenchParams, rb.DefaultRbenchParams):
+PERF_ARG_GROUP = ParamsGroup("perf setup")
+
+class RbenchProfileParams(SharedBenchParams):
     R: Path = rb.default_R()
     freq: int = field(
         default=1999,
         metadata={
-            "help": "perf sampling frequency (Hz)",
+            "metavar": "Hz",
+            "help": "perf sampling frequency",
+            "group": PERF_ARG_GROUP,
         },
     )
     call_graph: str = field(
         default="dwarf",
         metadata={
-            "help": "How the stack is obtained: `dwarf` reconstructs it from CFI, `fp` walks"
-            "saved frame pointers, `lbr` reads the CPU's branch stack.",
+            "help": "How the stack is obtained: "
+            "`dwarf` reconstructs it from CFI, "
+            "`fp` walks saved frame pointers, "
+            "`lbr` reads the CPU's branch stack.",
+            "choices": ["dwarf", "fp", "lbr"],
+            "group": PERF_ARG_GROUP,
         },
     )
     stack_size: int = field(
-        default=16384,
-        metadata={"help": "dwarf stack dump size (bytes; 16 kB)"},
+        default=16 * 1024,
+        metadata={
+            "metavar": "bytes",
+            "help": "dwarf stack dump size (16 kB)",
+            "group": PERF_ARG_GROUP,
+        },
     )
 
     frames: bool = field(
         default=True,
         metadata={
-            "help": "run `perf script` and write perf-frames.csv"
-            "The inherited default is None, which writes no tree; a recording needs"
-            "somewhere to go. Relative to the caller's cwd, so recordings do not land"
-            "inside this checkout.",
+            "help": "Write `perf-frames.csv`.",
+            "group": PERF_ARG_GROUP,
         },
     )
 
@@ -51,7 +61,7 @@ class RbenchProfileParams(SharedBenchParams, rb.DefaultRbenchParams):
 def instrument_harness_default_cmd(
     Rpath: Path,
     marker: Path,
-    ctx: Context[rb.DefaultRbenchParams],
+    ctx: Context[Params],
 ) -> Command:
     return rb.default_cmd(
         Rpath,

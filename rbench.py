@@ -22,23 +22,6 @@ BENCHMARKS_FOLDER = _HERE / "benchmarks"
 # ------------------------------------------------------------
 
 
-class DefaultRbenchParams(Params):
-    runs: int = field(
-        default=5,
-        metadata={
-            "metavar": "N",
-            "help": "Measure each benchmark in N separate R processes.",
-        },
-    )
-    iterations: int = field(
-        default=4,
-        metadata={
-            "metavar": "N",
-            "help": "Iterations inside each run.",
-        },
-    )
-
-
 DEFAULT_ENV = {
     "OPENBLAS_NUM_THREADS": "1",
     "OMP_NUM_THREADS": "1",
@@ -71,7 +54,7 @@ def inherit_shell_env() -> Env:
 
 def default_cmd(
     Rpath: Path,
-    ctx: Context[DefaultRbenchParams],
+    ctx: Context[Params],
     args: Callable[[str], Sequence[str]],
     # Call with the path to benchmark
     # Return the harness to run (first arg) and its arguments
@@ -370,7 +353,7 @@ class RbenchHarnessMetric(Metric):
 def harness_default_cmd(
     Rpath: Path,
     profile: Path | None,
-    ctx: Context[DefaultRbenchParams],
+    ctx: Context[Params],
 ) -> Command:
     return default_cmd(
         Rpath,
@@ -413,8 +396,22 @@ def default_R():
         )
 
 
-class RbenchParams(SharedBenchParams, DefaultRbenchParams):
+class RbenchHarnessParams(SharedBenchParams):
     R: Path = default_R()
+    runs: int = field(
+        default=5,
+        metadata={
+            "metavar": "N",
+            "help": "Measure each benchmark in N separate R processes.",
+        },
+    )
+    iterations: int = field(
+        default=4,
+        metadata={
+            "metavar": "N",
+            "help": "Iterations inside each run.",
+        },
+    )
     warmups: int = field(
         default=1,
         metadata={
@@ -437,7 +434,9 @@ class InProcessWarmup(Controller):
         super().__init__()
         self.warmups = warmups
 
-    def extract_execution(self, b, result: InvocationResult, run: int) -> Execution:
+    def extract_execution(
+        self, b: Benchmark, result: InvocationResult, run: int
+    ) -> Execution:
         e = super().extract_execution(b, result, run)
         its = [
             dataclasses.replace(it, warmup=True) if i < self.warmups else it
@@ -447,7 +446,7 @@ class InProcessWarmup(Controller):
 
 
 DEFAULT_APP = (
-    bench_app(params=RbenchParams)
+    bench_app(params=RbenchHarnessParams)
     .add(ALL_SUITES.with_shuffle(SHUFFLE_SEED))
     # Cmd
     .with_command(
