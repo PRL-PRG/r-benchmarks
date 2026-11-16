@@ -200,7 +200,7 @@ sub_mag <- function(big, little) {
     return(result)
 }
 
-sub <- function(x, y) {
+sub_ <- function(x, y) {
     if (y[[1]] == 0L)
         return(x)
     if (x[[1]] == 0L)
@@ -291,7 +291,7 @@ div_mag <- function(x_mag, y_mag) {
         if (le(mul(mid, y), x))
             lo <- mid
         else
-            hi <- sub(mid, one)
+            hi <- sub_(mid, one)
     }
     return(mag(lo))
 }
@@ -377,7 +377,7 @@ execute <- function(n=30) {
             n3a <- add(mul(n, THREE), a)
             t <- div(n3a, d)
             td = mul(t, d)
-            u <- add(sub(n3a, td), n)
+            u <- add(sub_(n3a, td), n)
             if (gt(d, u)) {
                 ns <- ns * 10L + to_int(t)
                 i <- i + 1L
@@ -389,7 +389,7 @@ execute <- function(n=30) {
                 }
                 if (i >= N)
                     break
-                a <- sub(a, td)  # TODO use td
+                a <- sub_(a, td)  # TODO use td
                 a <- mul(a, TEN)
                 n <- mul(n, TEN)
             }
