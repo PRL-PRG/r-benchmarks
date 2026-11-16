@@ -36,20 +36,31 @@ RUN set -eux \
   && make install \
   && cd / \
   && rm -rf "/tmp/R-${R_VERSION}" "/tmp/R-${R_VERSION}.tar.gz"
+
 ENV PATH=/opt/R/bin:$PATH
+ENV RBENCH_RHOME=/opt/R/lib/R
 
 ARG CRAN_SNAPSHOT=https://packagemanager.posit.co/cran/2026-09-01
-RUN echo "options(repos = c(CRAN = '$CRAN_SNAPSHOT'))" >> "$(R RHOME)/etc/Rprofile.site"
+ENV CRAN_SNAPSHOT=$CRAN_SNAPSHOT
 
 COPY . /r-benchmarks
 WORKDIR /r-benchmarks
+
+# Install packages
+RUN R --no-echo --vanilla -e "\
+  source('./scripts/install_packages.R');\
+  installPackages(\
+    c('Matrix', 'MASS', 'clusterGeneration'),\
+    lib='$RBENCH_RHOME/library',\
+    remote='$CRAN_SNAPSHOT'\
+  )"
 
 # Into R's *own* library, which is the only one the sealed run environment can
 # see: bench_env() blanks R_LIBS, R_LIBS_USER and R_LIBS_SITE to " ", so a
 # site-library install would be invisible to every benchmark. Blanking them here
 # too makes the build fail loudly if that ever stops being true.
 RUN R_LIBS=" " R_LIBS_USER=" " R_LIBS_SITE=" " \
-  R --slave --no-restore -f scripts/install_packages.R --args "$(R RHOME)/library"
+  R --slave --no-restore -f scripts/install_packages.R --args "$RBENCH_RHOME/library"
 
 # Install uv and rbench dependencies
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
@@ -69,4 +80,7 @@ RUN rm -rf /var/cache/apt/lists/* /tmp/* /var/tmp/*
 
 # Defaults
 RUN mkdir -p /out
-ENTRYPOINT ["./rbench.py"]
+RUN printf "#!/bin/sh\nexec /r-benchmarks/rbench.py --remote $CRAN_SNAPSHOT --library $RBENCH_RHOME"' "$@"\n' > /r-benchmarks/rbench
+RUN chmod +x /r-benchmarks/rbench
+
+ENTRYPOINT ["/r-benchmarks/rbench"]

@@ -4,6 +4,7 @@
 from dataclasses import field
 from pathlib import Path
 import re
+import threading
 from typing import Iterable
 
 import rbench as rb
@@ -16,7 +17,8 @@ DEFAULT_PERF_DIR = Path().cwd() / "output/perf"
 
 PERF_ARG_GROUP = ParamsGroup("perf setup")
 
-class RbenchProfileParams(SharedBenchParams):
+
+class RbenchProfileParams(SharedBenchParams, rb.RbenchInstallPackagesParams):
     R: Path = rb.default_R()
     freq: int = field(
         default=1999,
@@ -88,22 +90,28 @@ def get_perf(ctx: Context[RbenchProfileParams]) -> PerfRecord:
 
 class CompileMarkerHook(Hook):
     executed: bool
-    R: Path
+    lock: threading.Lock
+    Rpath: Path
     result_dir: Path
 
-    __slots__ = ("executed", "R", "result_dir")
-
-    def __init__(self, R: Path, result_dir: Path) -> None:
+    def __init__(self, Rpath: Path, result_dir: Path) -> None:
         self.executed = False
-        self.R = R
+        self.lock = threading.Lock()
+        self.Rpath = Rpath
         self.result_dir = result_dir
 
     def setup(self, benchmark: Benchmark) -> None:
-        if not self.executed:
+        if self.executed:
+            return
+
+        with self.lock:
+            if self.executed:
+                return
+
             self.result_dir.mkdir(parents=True, exist_ok=True)
             res = execute(
                 command=[
-                    str(self.R),
+                    str(self.Rpath),
                     "CMD",
                     "SHLIB",
                     str(PERF_SUBFOLDER / "marker.c"),
@@ -154,6 +162,8 @@ INSTRUMENT_APP = (
             ctx,
         )
     )
+    # Install packages
+    .with_hook(lambda ctx: ctx.params.get_install_packages_hook)
     # Control
     .with_runs(1)
     .with_controller(get_perf)

@@ -3,6 +3,7 @@
 
 import csv
 import dataclasses
+from functools import cached_property
 import os
 import re
 import sys
@@ -10,6 +11,7 @@ import shutil
 from collections.abc import Sequence
 from dataclasses import field
 from pathlib import Path
+import threading
 from typing import Any, Callable, Iterable
 
 from bench import *
@@ -72,8 +74,6 @@ def default_cmd(
     Rpath: Path,
     ctx: Context[Params],
     args: Callable[[str], Sequence[str]],
-    # Call with the path to benchmark
-    # Return the harness to run (first arg) and its arguments
 ) -> Command:
     """
     `Rpath` is the path to the `R` binary (NOT `Rscript`) tha shall be executed
@@ -270,12 +270,12 @@ R_BENCHMARK_25 = suite(
     bench("Matrix_calculation/att1_2", arg=3),
     bench("Matrix_calculation/att1_3", arg=1),
     bench("Matrix_calculation/att1_4", arg=2),
-    bench("Matrix_calculation/att1_5", arg=1),
+    bench("Matrix_calculation/att1_5", arg=1, required_packages=["Matrix"]),
     bench("Matrix_functions/att2_1", arg=4),
     bench("Matrix_functions/att2_2", arg=2),
     bench("Matrix_functions/att2_3", arg=1),
-    bench("Matrix_functions/att2_4", arg=1),
-    bench("Matrix_functions/att2_5", arg=1),
+    bench("Matrix_functions/att2_4", arg=1, required_packages=["Matrix"]),
+    bench("Matrix_functions/att2_5", arg=1, required_packages=["Matrix"]),
     bench("Programmation/att3_1", arg=6),
     bench("Programmation/att3_2", arg=3),
     bench("Programmation/att3_3", arg=2),
@@ -301,17 +301,17 @@ RIPOSTE = suite(
     bench("example", arg=20000000),
     bench("filter1d", arg=10000000),
     bench("histogram", arg=9),
-    bench("kmeans", arg=1000000),
-    bench("lr", arg=50000),
-    bench("lr_test", arg=3),
+    bench("kmeans", arg=1000000, required_packages=["MASS"]),
+    bench("lr", arg=50000, required_packages=["clusterGeneration", "MASS"]),
+    bench("lr_test", arg=3, required_packages=["clusterGeneration", "MASS"]),
     bench("mandelbrot", arg=100),
-    bench("pca", arg=100000),
-    bench("pca-blocked", arg=100000),
+    bench("pca", arg=100000, required_packages=["clusterGeneration", "MASS"]),
+    bench("pca-blocked", arg=100000, required_packages=["clusterGeneration", "MASS"]),
     bench("raysphere", arg=10000000),
     bench("sample", arg=10000000),
     bench("sample_builtin", arg=10000000),
     bench("smv", arg=20000000),
-    bench("smv_builtin", arg=6),
+    bench("smv_builtin", arg=6, required_packages=["Matrix"]),
 )
 
 ALL_SUITES = (
@@ -329,6 +329,91 @@ ALL_SUITES = (
     .with_cwd(lambda ctx: BENCHMARKS_FOLDER / ctx.suite)
     .with_env(DEFAULT_ENV)
 )
+
+# ------------------------------------------------------------
+# DEFAULT AUTOMATIC PACKAGE INSTALLATION
+# ------------------------------------------------------------
+INSTALL_PACKAGES_PATH = _HERE / "scripts" / "install_packages.R"
+
+
+def install_packages(
+    packages: list[str],
+    *,
+    Rpath: Path,
+    lib: Path,
+    remote: str = "http://cran.r-project.org",
+) -> InvocationResult:
+    expr = (
+        f"source('{INSTALL_PACKAGES_PATH}');"
+        + "installPackages("
+        + f"c({','.join(f"'{p}'" for p in packages)})"
+        + f",lib='{str(lib)}'"
+        + f",remote='{remote}'"
+        + ")"
+    )
+
+    cmd = [str(Rpath), "--no-echo", "--vanilla", "-e", expr]
+
+    return execute(
+        command=cmd,
+        cwd=Path.cwd(),
+        inherit_env=True,
+    )
+
+
+class InstallPackagesHook(Hook):
+    # Appart from the script not installing things twice,
+    # the hook also keeps a set of already installed packages
+    # which is faster than waiting for R to assert they have been installed
+    installed: set[str]
+    lock: threading.Lock
+
+    Rpath: Path
+    library_path: Path
+    remote: str
+
+    def __init__(
+        self,
+        Rpath: Path,
+        library_path: Path,
+        remote: str = "http://cran.r-project.org",
+    ) -> None:
+        self.installed = set()
+        self.lock = threading.Lock()
+
+        self.Rpath = Rpath
+        self.library_path = library_path
+        self.remote = remote
+
+    def setup(self, benchmark: Benchmark) -> None:
+        packages: list[str] | None = benchmark.data.get("required_packages")
+        if packages is None:
+            return
+
+        if self.installed.issuperset(packages):
+            return
+
+        with self.lock:
+            if self.installed.issuperset(packages):
+                return
+
+            print("Downloading packages: " + ",".join(packages))
+
+            res = install_packages(
+                packages,
+                Rpath=self.Rpath,
+                lib=self.library_path,
+                remote=self.remote,
+            )
+
+            if res.returncode != 0:
+                raise BenchError(
+                    f"Failed to install packages {','.join(packages)}.\n" + res.stderr
+                )
+
+            self.installed = self.installed.union(packages)
+
+
 # ------------------------------------------------------------
 # DEFAULT HARNESS INSTRUMENTATION
 # ------------------------------------------------------------
@@ -401,7 +486,7 @@ SHUFFLE_SEED = 20260810
 
 def default_R():
     help_string = (
-        "A path to the R binary. If R is in path, it is used as default"
+        "A path to the R binary. If R is in path, it is used as default. "
         "Otherwise it needs to be specified"
     )
     R = shutil.which("R")
@@ -419,7 +504,52 @@ def default_R():
         )
 
 
-class RbenchHarnessParams(SharedBenchParams):
+PACKAGES_GROUP = ParamsGroup("packages control")
+
+
+class RbenchInstallPackagesParams(Params):
+    remote: str = field(
+        default="http://cran.r-project.org",
+        metadata={
+            "help": "What remote should be used for downloading packages",
+            "group": PACKAGES_GROUP,
+        },
+    )
+    library_path: Path | None = field(
+        default=None,
+        metadata={
+            "help": "The path to the library. If not specified, uses $(R RHOME)/library",
+            "group": PACKAGES_GROUP,
+        },
+    )
+
+    @cached_property  # makes it a singleton
+    def get_install_packages_hook(self) -> InstallPackagesHook:
+        return InstallPackagesHook(
+            Rpath=self.R,
+            library_path=self.get_library_path,
+            remote=self.remote,
+        )
+
+    @cached_property
+    def get_library_path(self) -> Path:
+        if self.library_path is not None:
+            return self.library_path.resolve()
+
+        res = execute(
+            [str(self.R), "RHOME"],
+            cwd=Path.cwd(),
+            inherit_env=True,
+        )
+
+        r_home = res.stdout.strip()
+        if res.returncode != 0 or r_home == "":
+            raise BenchError("Could not determine RHOME")
+
+        return Path(r_home).resolve() / "library"
+
+
+class RbenchHarnessParams(SharedBenchParams, RbenchInstallPackagesParams):
     R: Path = default_R()
     runs: int = field(
         default=3,
@@ -471,7 +601,11 @@ class InProcessWarmup(Controller):
 
 DEFAULT_APP = (
     bench_app(params=RbenchHarnessParams)
-    .add(ALL_SUITES.with_shuffle(SHUFFLE_SEED))
+    .add(
+        ALL_SUITES.with_shuffle(SHUFFLE_SEED).with_env(
+            lambda ctx: {"R_LIBS": str(ctx.params.get_library_path)}
+        )
+    )
     # Cmd
     .with_command(
         lambda ctx: harness_default_cmd(
@@ -480,6 +614,8 @@ DEFAULT_APP = (
             ctx,
         )
     )
+    # Download dependencies
+    .with_hook(lambda ctx: ctx.params.get_install_packages_hook)
     # Control
     .with_runs(lambda ctx: FixedRuns(ctx.params.runs))
     .with_controller(lambda ctx: InProcessWarmup(ctx.params.warmups))
