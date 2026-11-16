@@ -34,8 +34,6 @@ areWeFast/mandelbrot (max_rss)
   72.05 MB (1 runs)
 ```
 
-TODO: Mention the external packages
-
 ## How to use
 
 The only dependency is [`uv`](https://docs.astral.sh/uv/).
@@ -86,10 +84,18 @@ defined benchmarks, or with different ones that conform to the same structure.
 For more details about the structure, see `benchmarks/harness.R` directly.
 The helpers are `RbenchHarnessSuccess` which makes sure that at least one
 iteration was executed, `RbenchHarnessMetric` which parses the captured
-metrics, and `harness_default_cmd`, a constructor function which 
+metrics, and `harness_default_cmd`, a constructor function that uses the format
+of the harness.
+
+**Automatic package hooks** Every benchmark that has the `required_packages`
+data field is picked up by the `InstallPackagesHook`, satisfying its
+dependencies before running the benchmark.
 
 **CLI** The input components - parameters and controller, as well
-as the whole `bench_app` can be imported and extended/reused as well.
+as the whole `bench_app` can be imported and extended/reused as well. If only
+a single instance of R is desired for benchmarking at all times, the
+`RbenchSingleRParams` parameters together with the `InstallPackagesHook` can
+be used.
 
 ### Running benchmark without bench
 
