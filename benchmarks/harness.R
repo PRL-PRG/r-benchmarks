@@ -2,17 +2,16 @@
 #
 # Minimal benchmark harness.
 #
-# Usage: Rscript harness.R <benchmark.R> <iterations> [<size>]
+# Usage: Rscript harness.R <benchmark.R> <iterations> [<size>] [<rbench_profile>]
 #
-# 1. sets the working directory to be the one of the <benchmark.R>
-# 2. sources <benchmark.R>
-# 3. if <benchmark.R> defines 'doctor', it will run the function
-# 4. if <benchmark.R> defines 'setup', it will run 'setup(<size>)'
-# 5. finally, runs <iterations> times 'execute(<size>)'
+# 1. sources <benchmark.R>
+# 2. if <benchmark.R> defines 'doctor', it will run the function
+# 3. if <benchmark.R> defines 'setup', it will run 'setup(<size>)'
+# 4. finally, runs <iterations> times 'execute(<size>)'
 #
 # If <size> is omitted the benchmark's own default is used.
 #
-# RBENCH_PROFILE, if set, names an R file sourced before the benchmark. If it
+# rbench_profile, if passed, names an R file sourced before the benchmark. If it
 # defines `rbench_prepare()`, that is called after setup() and before the first
 # iteration, for anything that must act on the benchmark's loaded functions.
 #
@@ -87,9 +86,9 @@ iterate <- function(name, size, iters) {
       name,
       it,
       as.numeric(difftime(t1, t0, units = "secs")) * 1000,
-      (g1[[3L]] - g0[[3L]]) * 1000,
-      forced * 1000,
-      (c1[[1L]] - c0[[1L]] + c1[[2L]] - c0[[2L]]) * 1000)
+        (g1[[3L]] - g0[[3L]]) * 1000,
+        forced * 1000,
+        (c1[[1L]] - c0[[1L]] + c1[[2L]] - c0[[2L]]) * 1000)
     )
   }
 }
@@ -99,7 +98,7 @@ run <- function(args) {
     stop("usage: harness.R <benchmark.R> <iterations> [<size>] [<rbench_profile>]", call. = FALSE)
   }
 
-  file  <- args[[1L]]
+  file <- args[[1L]]
   source(file)
 
   iters <- as.integer(args[[2L]])
