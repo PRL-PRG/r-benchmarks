@@ -21,8 +21,22 @@ BENCHMARKS_FOLDER = _HERE / "benchmarks"
 # DEFAULTS
 # ------------------------------------------------------------
 
+LOCALE = {
+    "LC_CTYPE": "en_US.UTF-8",
+    "LC_TIME": "en_US.UTF-8",
+    "LC_MONETARY": "en_US.UTF-8",
+    "LC_PAPER": "en_US.UTF-8",
+    "LC_ADDRESS": "C",
+    "LC_MEASUREMENT": "en_US.UTF-8",
+    "LC_NUMERIC": "C",
+    "LC_COLLATE": "en_US.UTF-8",
+    "LC_MESSAGES": "en_US.UTF-8",
+    "LC_NAME": "C",
+    "LC_TELEPHONE": "C",
+    "LC_IDENTIFICATION": "C",
+}
 
-DEFAULT_ENV = {
+DEFAULT_ENV = LOCALE | {
     "OPENBLAS_NUM_THREADS": "1",
     "OMP_NUM_THREADS": "1",
     "MKL_NUM_THREADS": "1",
