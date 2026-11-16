@@ -4,16 +4,16 @@
 # writes on first run, ~380 MB on a developer machine. Copying them in would both
 # bloat the image and hide the very failure CI exists to catch -- a benchmark
 # whose doctor() only passes because a stale cache happens to be on disk.
+*
+!benchmarks
 benchmarks/**/data/
-benchmarks/marker.o
-benchmarks/marker.so
 
-.venv/
-__pycache__/
-*.pyc
-output*/
+!perf/harness_instrument.R
+!perf/marker.c
 
-.git/
-.github/
-Dockerfile
-.dockerignore
+!scripts/
+
+!pyproject.toml
+!uv.lock
+!rbench.py
+!rbench_perf.py
