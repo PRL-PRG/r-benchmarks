@@ -47,6 +47,8 @@ def inherit_shell_env() -> Env:
             "LC_ALL",
             "LC_COLLATE",
             "TZ",
+            # TODO: Should this be here?
+            # Shouldn't this be passed as explicit with_env?
             "R_DISABLE_BYTECODE",
         ]
     }
@@ -60,7 +62,14 @@ def default_cmd(
     # Return the harness to run (first arg) and its arguments
 ) -> Command:
     """
-    Rpath is the path to the R binary tha shall be executed
+    `Rpath` is the path to the `R` binary (NOT `Rscript`) tha shall be executed
+
+    `args` gets as an argument the file that should be executed and is expected
+    to return as a first argument the file the run and then the rest of the arguments.
+    For example
+    ```python
+    args("foo/bench.R") == ["myHarness.R", "foo/bench.R", "42"]
+    ````
     """
     benchmark = str(BENCHMARKS_FOLDER / ctx.suite / (ctx.benchmark + ".R"))
     concrete_args = args(benchmark)
@@ -427,6 +436,7 @@ class RbenchHarnessParams(SharedBenchParams):
     )
 
 
+# TODO: Upon stats landing in upstream `bench`, change this
 class InProcessWarmup(Controller):
     "Flag the first `warmups` iterations of every execution as warm-up."
 
