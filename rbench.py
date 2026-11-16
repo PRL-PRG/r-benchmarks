@@ -507,7 +507,8 @@ def default_R():
 PACKAGES_GROUP = ParamsGroup("packages control")
 
 
-class RbenchInstallPackagesParams(Params):
+class RbenchSingleRParams(Params):
+    R: Path = default_R()
     remote: str = field(
         default="http://cran.r-project.org",
         metadata={
@@ -549,8 +550,7 @@ class RbenchInstallPackagesParams(Params):
         return Path(r_home).resolve() / "library"
 
 
-class RbenchHarnessParams(SharedBenchParams, RbenchInstallPackagesParams):
-    R: Path = default_R()
+class RbenchHarnessParams(SharedBenchParams, RbenchSingleRParams):
     runs: int = field(
         default=3,
         metadata={

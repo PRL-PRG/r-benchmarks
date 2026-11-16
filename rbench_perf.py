@@ -18,8 +18,7 @@ DEFAULT_PERF_DIR = Path().cwd() / "output/perf"
 PERF_ARG_GROUP = ParamsGroup("perf setup")
 
 
-class RbenchProfileParams(SharedBenchParams, rb.RbenchInstallPackagesParams):
-    R: Path = rb.default_R()
+class RbenchProfileParams(SharedBenchParams, rb.RbenchSingleRParams):
     freq: int = field(
         default=1999,
         metadata={
