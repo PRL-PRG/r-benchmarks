@@ -91,8 +91,7 @@ jobs:
       - name: Run the corpus on vanilla R
         run: |
           docker run --name "$CONTAINER" "$IMAGE" \
-              --runs 3 --iterations 5 --warmups 2 \
-              --jobs 1 --no-progress \
+              --no-progress \
               --json /out/report.json \
               --csv /out/samples.csv \
               --dir /out/runs

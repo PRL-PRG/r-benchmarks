@@ -408,21 +408,21 @@ def default_R():
 class RbenchHarnessParams(SharedBenchParams):
     R: Path = default_R()
     runs: int = field(
-        default=5,
+        default=3,
         metadata={
             "metavar": "N",
             "help": "Measure each benchmark in N separate R processes.",
         },
     )
     iterations: int = field(
-        default=4,
+        default=5,
         metadata={
             "metavar": "N",
             "help": "Iterations inside each run.",
         },
     )
     warmups: int = field(
-        default=1,
+        default=2,
         metadata={
             "metavar": "N",
             "help": "Number of iterations discarded at the start of each run.",
