@@ -112,33 +112,9 @@ jobs:
       # so it stays here in the workflow instead of in a file to go stale.
       - name: Check for benchmark failures
         run: |
-          docker run -i --rm --entrypoint R -v "$PWD/results:/results:ro" "$IMAGE" \
-            --no-echo --vanilla -f /dev/stdin <<'RSCRIPT'
-          # colClasses matters: on a clean run `failure` is empty in every row, and
-          # read.csv would type it as logical NA rather than empty strings, so a
-          # string comparison would quietly stop meaning anything.
-          d <- read.csv("/results/samples.csv", comment.char = "#", colClasses = "character")
-          stopifnot(nrow(d) > 0, all(c("suite", "benchmark", "failure") %in% names(d)))
-
-          name <- paste(d$suite, d$benchmark, sep = "/")
-          bad <- trimws(d$failure) != ""
-          n <- length(unique(name))
-          cat(sprintf("%d samples over %d benchmarks\n", nrow(d), n))
-
-          ok <- TRUE
-          if (any(bad)) {
-            cat(sprintf("\n%d benchmark(s) failed:\n", length(unique(name[bad]))))
-            for (s in sort(unique(sprintf("  %s: %s", name[bad], trimws(d$failure[bad])))))
-              cat(s, "\n")
-            ok <- FALSE
-          }
-          if (n != 118) {
-            cat(sprintf("\nexpected 118 benchmarks, got %d\n", n))
-            ok <- FALSE
-          }
-          if (!ok) quit(status = 1)
-          cat("no failures\n")
-          RSCRIPT
+          docker run -i --rm -v "$PWD/results:/results:ro"\
+            --entrypoint /opt/r-benchmarks/scripts/check_csv.R \
+            "$IMAGE"
 
       - name: Archive results
         if: always()
