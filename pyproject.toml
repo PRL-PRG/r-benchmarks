@@ -9,6 +9,19 @@ dependencies = ["bench"]
 [tool.uv.sources]
 bench = { git = "https://github.com/PRL-PRG/bench.git", rev = "4639a83a664901d83db3637bab863374878e96ac" }
 
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+bypass-selection = true
+
+[tool.hatch.build.targets.wheel.force-include]
+"rbench.py" = "rbench/__init__.py"
+"rbench_perf.py" = "rbench/perf.py"
+"benchmarks" = "rbench/benchmarks"
+"perf" = "rbench/perf"
+"scripts/install_packages.R" = "rbench/scripts/install_packages.R"
 
 [tool.pyright]
 venvPath= "."
