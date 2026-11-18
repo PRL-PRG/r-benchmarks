@@ -72,7 +72,20 @@ in multiple ways. One of the examples is the `rbench_perf.py`, which reuses the
 suites definition, but defines different ways of running them, as well as
 different CLI.
 
-**Importing the suite** TODO: How to import from out-of-tree
+**Importing the suite** To import the project from out-of-tree scripts, use the
+`uv` tool. Specify in the header:
+```python
+#!/usr/bin/env -S uv run --script --quiet
+# /// script
+# requires-python = ">=3.12"
+# dependencies = ["rbench"]
+#
+# [tool.uv.sources]
+# rbench = {git = "https://github.com/PRL-PRG/r-benchmarks/"}
+# ///
+```
+Then you can import the components of `rbench.py` as the `rbench` module, and
+the `rbench_perf.py` components as `rbench.perf` Python module.
 
 **Suites** The suites can be reused by referencing `ALL_SUITES`. Note that by
 default it does not specify the command. A helper
