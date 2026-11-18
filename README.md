@@ -72,7 +72,7 @@ in multiple ways. One of the examples is the `rbench_perf.py`, which reuses the
 suites definition, but defines different ways of running them, as well as
 different CLI.
 
-**Importing the suite** To import the project from out-of-tree scripts, use the
+**Importing the suite.** To import the project from out-of-tree scripts, use the
 `uv` tool. Specify in the header:
 ```python
 #!/usr/bin/env -S uv run --script --quiet
@@ -87,12 +87,12 @@ different CLI.
 Then you can import the components of `rbench.py` as the `rbench` module, and
 the `rbench_perf.py` components as `rbench.perf` Python module.
 
-**Suites** The suites can be reused by referencing `ALL_SUITES`. Note that by
+**Suites.** The suites can be reused by referencing `ALL_SUITES`. Note that by
 default it does not specify the command. A helper
 function `default_cmd` should help with formatting the R flags, as well as the
 path to the files.
 
-**Harness** The default harness can either be used with the 
+**Harness.** The default harness can either be used with the 
 defined benchmarks, or with different ones that conform to the same structure.
 For more details about the structure, see `benchmarks/harness.R` directly.
 The helpers are `RbenchHarnessSuccess` which makes sure that at least one
@@ -100,11 +100,11 @@ iteration was executed, `RbenchHarnessMetric` which parses the captured
 metrics, and `harness_default_cmd`, a constructor function that uses the format
 of the harness.
 
-**Automatic package hooks** Every benchmark that has the `required_packages`
+**Automatic package hooks.** Every benchmark that has the `required_packages`
 data field is picked up by the `InstallPackagesHook`, satisfying its
 dependencies before running the benchmark.
 
-**CLI** The input components - parameters and controller, as well
+**CLI.** The input components - parameters and controller, as well
 as the whole `bench_app` can be imported and extended/reused as well. If only
 a single instance of R is desired for benchmarking at all times, the
 `RbenchSingleRParams` parameters together with the `InstallPackagesHook` can
