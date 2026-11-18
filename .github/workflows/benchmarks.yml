@@ -1,15 +1,4 @@
 # Run the corpus on vanilla R, on every pull request.
-#
-# Two stages, split by what each half needs. Building the image -- compiling R
-# from source, resolving CRAN and the pinned `bench` -- is machine-independent
-# and expensive, so it runs on disposable GitHub-hosted workers and is cached.
-# Running the benchmarks is not machine-independent at all, so it runs on the
-# self-hosted runner, from the image the first stage pushed.
-#
-# What this gates is that every benchmark in the corpus still executes on stock
-# R. The timings it produces are a by-product: the runner is a shared 4-core
-# desktop, and the image links R's reference BLAS, so the CSV is worth reading
-# for "did it run" and not for "how fast is it".
 
 name: benchmarks
 
@@ -106,10 +95,6 @@ jobs:
       # what actually decides the build. A dead benchmark is recorded on the
       # CSV's `failure` column and the run continues; only a BenchError or an
       # interrupt is non-zero.
-      #
-      # Run through the image's own R rather than the runner's, so the check
-      # needs nothing installed on the machine, and read the script from stdin
-      # so it stays here in the workflow instead of in a file to go stale.
       - name: Check for benchmark failures
         run: |
           docker run -i --rm -v "$PWD/results:/results:ro"\
