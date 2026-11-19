@@ -2,6 +2,8 @@
  *
  * `perf record -k1` timestamps its samples with CLOCK_MONOTONIC
  * so we can distinguish different parts of the find perf recording.
+ *
+ * The problem is that R has no monotonic clock of its own.
  */
 
 #define R_NO_REMAP
