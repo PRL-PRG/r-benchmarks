@@ -56,7 +56,7 @@ prepare <- function(name, size) {
 
   if (exists("rbench_prepare") && is.function(rbench_prepare)) {
     tm <- system.time(rbench_prepare())
-    cat(sprintf("====== %s, prepare completed (%.3f ms) ======\n",
+    cat(sprintf("====== %s, rbench_prepare completed (%.3f ms) ======\n",
                 name, tm[["elapsed"]] * 1000))
   }
 }
