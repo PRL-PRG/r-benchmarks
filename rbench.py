@@ -665,4 +665,6 @@ DEFAULT_APP = (
 )
 
 if __name__ == "__main__":
-    DEFAULT_APP.main()
+    r = DEFAULT_APP.main()
+    if len(r.failures) != 0:
+        sys.exit(1)

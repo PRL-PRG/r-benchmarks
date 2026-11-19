@@ -91,16 +91,6 @@ jobs:
           rm -rf results
           docker cp "$CONTAINER:/out" results || echo "nothing to collect"
 
-      # rbench.py returns 0 whether or not the benchmarks worked, so this is
-      # what actually decides the build. A dead benchmark is recorded on the
-      # CSV's `failure` column and the run continues; only a BenchError or an
-      # interrupt is non-zero.
-      - name: Check for benchmark failures
-        run: |
-          docker run -i --rm -v "$PWD/results:/results:ro"\
-            --entrypoint /opt/r-benchmarks/scripts/check_csv.R \
-            "$IMAGE"
-
       - name: Archive results
         if: always()
         uses: actions/upload-artifact@v4
