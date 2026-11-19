@@ -22,17 +22,16 @@ dyn.load(marker)
 now <- function()
   .Call("rbench_monotonic")
 
-t0 <- -1
-t1 <- -1
-mark <- function(tag)
+mark <- function(tag, t0, t1) {
   cat(sprintf("MARK\t%s\t%.6f\t%.6f\n", tag, t0, t1))
+}
 
 # Source
 t0 <- now()
 source(basename(file))
 t1 <- now()
 
-mark("source")
+mark("source", t0, t1)
 
 # Get the size from cmdline if available, from formals otherwise
 size <- if (length(args) >= 3L) {
@@ -50,17 +49,17 @@ if (exists("setup") && is.function(setup)) {
     setup()
   }
   t1 <- now()
-  mark("setup")
+  mark("setup", t0, t1)
 }
 
 # GC
 t0 <- now()
 invisible(gc())
 t1 <- now()
-mark("gc")
+mark("gc", t0, t1)
 
 # execute
 t0 <- now()
 res <- execute(size)
 t1 <- now()
-mark("execute")
+mark("execute", t0, t1)
