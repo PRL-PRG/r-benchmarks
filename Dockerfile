@@ -33,9 +33,7 @@ RUN set -eux \
   && CFLAGS="-g -O2" CXXFLAGS="-g -O2" FFLAGS="-g -O2" FCFLAGS="-g -O2" \
      ./configure --prefix=/opt/R --without-recommended-packages --with-x=no \
   && make -j"$(nproc)" \
-  && make install \
-  && cd / \
-  && rm -rf "/tmp/R-${R_VERSION}" "/tmp/R-${R_VERSION}.tar.gz"
+  && make install
 
 ENV PATH=/opt/R/bin:$PATH
 ENV RBENCH_RHOME=/opt/R/lib/R
