@@ -352,7 +352,7 @@ def install_packages(
     repos <- getOption("repos")
     repos["CRAN"] <- "{remote}"
 
-    install.packages({packages_list}, repos = repos, Ncpus = {ncpus}, lib = "{lib}")
+    install.packages({packages_v}, repos = repos, Ncpus = {ncpus}, lib = "{lib}")
 
     m <- setdiff({packages_v}, rownames(installed.packages(lib.loc = "{lib}")))
     if (length(m)) stop("Missing packages: ", paste(m, collapse=","))
