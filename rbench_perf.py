@@ -99,6 +99,9 @@ class CompileMarkerHook(Hook):
         self.Rpath = Rpath
         self.result_dir = result_dir
 
+    # The reason why we have an inner flag and not just checking is just to
+    # make sure that it has been compiled with the current version of R; for
+    # example when reusing the same output directory between versions
     def setup(self, benchmark: Benchmark) -> None:
         if self.executed:
             return
