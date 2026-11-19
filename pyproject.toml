@@ -21,7 +21,6 @@ bypass-selection = true
 "rbench_perf.py" = "rbench/perf.py"
 "benchmarks" = "rbench/benchmarks"
 "perf" = "rbench/perf"
-"scripts/install_packages.R" = "rbench/scripts/install_packages.R"
 
 [tool.pyright]
 venvPath= "."

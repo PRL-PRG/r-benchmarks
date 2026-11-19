@@ -330,12 +330,10 @@ ALL_SUITES = (
     .with_env(DEFAULT_ENV)
 )
 
+
 # ------------------------------------------------------------
 # DEFAULT AUTOMATIC PACKAGE INSTALLATION
 # ------------------------------------------------------------
-INSTALL_PACKAGES_PATH = _HERE / "scripts" / "install_packages.R"
-
-
 def install_packages(
     packages: list[str],
     *,
@@ -343,21 +341,61 @@ def install_packages(
     lib: Path,
     remote: str = "http://cran.r-project.org",
 ) -> InvocationResult:
-    expr = (
-        f"source('{INSTALL_PACKAGES_PATH}');"
-        + "installPackages("
-        + f"c({','.join(f"'{p}'" for p in packages)})"
-        + f",lib='{str(lib)}'"
-        + f",remote='{remote}'"
-        + ")"
-    )
+    packages_list = ",".join(f'"{p}"' for p in packages)
+    packages_v = f"c({packages_list})"
 
-    cmd = [str(Rpath), "--no-echo", "--vanilla", "-e", expr]
+    ncpus = os.cpu_count() or 1
+
+    lib.mkdir(parents=True, exist_ok=True)
+
+    script = f"""
+    repos <- getOption("repos")
+    repos["CRAN"] <- "{remote}"
+
+    install.packages({packages_list}, repos = repos, Ncpus = {ncpus}, lib = "{lib}")
+
+    m <- setdiff({packages_v}, rownames(installed.packages(lib.loc = "{lib}")))
+    if (length(m)) stop("Missing packages: ", paste(m, collapse=","))
+    """
+
+    cmd = [str(Rpath), "--no-echo", "--vanilla", "-e", script]
 
     return execute(
         command=cmd,
         cwd=Path.cwd(),
         inherit_env=True,
+    )
+
+
+def get_installed_packages(
+    Rpath: Path,
+    lib: Path,
+) -> list[str]:
+    res = execute(
+        command=[
+            str(Rpath),
+            "--no-echo",
+            "--vanilla",
+            "-e",
+            f"""cat(rownames(installed.packages(lib.loc = "{lib}")), sep="\\n")""",
+        ],
+        cwd=Path.cwd(),
+        inherit_env=True,
+    )
+
+    if res.returncode != 0:
+        raise BenchError(
+            "Problem while trying to get the installed packages:\n" + res.stderr
+        )
+
+    return list(
+        filter(
+            lambda p: p != "",
+            map(
+                lambda p: p.strip(),
+                res.stdout.splitlines(),
+            ),
+        )
     )
 
 
@@ -378,7 +416,7 @@ class InstallPackagesHook(Hook):
         library_path: Path,
         remote: str = "http://cran.r-project.org",
     ) -> None:
-        self.installed = set()
+        self.installed = set(get_installed_packages(Rpath, library_path))
         self.lock = threading.Lock()
 
         self.Rpath = Rpath
