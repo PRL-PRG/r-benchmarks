@@ -46,26 +46,26 @@ ENV CRAN_SNAPSHOT=$CRAN_SNAPSHOT
 COPY . /r-benchmarks
 WORKDIR /r-benchmarks
 
-# Install packages
-RUN R --no-echo --vanilla -e "\
-  source('./scripts/install_packages.R');\
-  installPackages(\
-    c('Matrix', 'MASS', 'clusterGeneration'),\
-    lib='$RBENCH_RHOME/library',\
-    remote='$CRAN_SNAPSHOT'\
-  )"
-
-# Into R's *own* library, which is the only one the sealed run environment can
-# see: bench_env() blanks R_LIBS, R_LIBS_USER and R_LIBS_SITE to " ", so a
-# site-library install would be invisible to every benchmark. Blanking them here
-# too makes the build fail loudly if that ever stops being true.
-RUN R_LIBS=" " R_LIBS_USER=" " R_LIBS_SITE=" " \
-  R --slave --no-restore -f scripts/install_packages.R --args "$RBENCH_RHOME/library"
-
 # Install uv and rbench dependencies
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 RUN /root/.local/bin/uv sync
 ENV PATH=/root/.local/bin:$PATH
+
+# Install rbench packages
+RUN .venv/bin/python3 <<EOF
+import rbench as rb
+from pathlib import Path
+import sys
+e = rb.install_packages(
+  ["Matrix", "MASS", "clusterGeneration"],
+  Rpath = Path("/opt/R/bin/R"),
+  lib = Path("$RBENCH_RHOME/library"),
+  remote = Path("$CRAN_SNAPSHOT"),
+)
+if e.returncode != 0:
+  print("Failed to install packages:\n" + e.stderr, file=sys.stderr)
+  sys.exit(e.returncode)
+EOF
 
 # Make sure rbench runs
 RUN ./rbench.py --list > /dev/null
