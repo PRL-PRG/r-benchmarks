@@ -70,6 +70,12 @@ iterate <- function(name, size, iters) {
     gc()
     forced <- as.numeric(difftime(Sys.time(), forced, units = "secs"))
     flush(stdout())
+    # A millisecond idle before the clock starts. Without it, the state the
+    # previous iteration (or process) left in the CPU's branch predictors carries
+    # over: about one convolution iteration in fifteen ran 37% slower, and
+    # att3_5, em and matmult_triplp moved by whole processes. After the pause
+    # every iteration starts alike; 1 ms is enough, longer changes nothing.
+    Sys.sleep(0.001)
 
     g0 <- gc.time()
     c0 <- proc.time()
