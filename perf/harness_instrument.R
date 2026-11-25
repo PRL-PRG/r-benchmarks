@@ -28,7 +28,7 @@ mark <- function(tag, t0, t1) {
 
 # Source
 t0 <- now()
-source(basename(file))
+source(file)
 t1 <- now()
 
 mark("source", t0, t1)
